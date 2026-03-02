@@ -1,0 +1,12 @@
+notebooks/*
+*.pycache*
+*__pycache__*
+*.ipynb_checkpoints
+.vscode/*
+logs/*
+CLAUDE.md
+AGENTS.md
+.cursor/
+.coverage
+*archive*
+tutorials/output/
