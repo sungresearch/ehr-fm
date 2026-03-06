@@ -23,6 +23,7 @@ See `pyproject.toml` for the full dependency list.
 ```bash
 cd ehr-fm
 pip install -e .
+pip install xformers==0.0.31 --no-build-isolation
 ```
 
 ## Data Format
