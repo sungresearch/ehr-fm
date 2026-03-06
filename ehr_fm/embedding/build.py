@@ -60,25 +60,43 @@ def encode_strings(
 ) -> np.ndarray:
     """Encode strings with a frozen text embedding model.
 
+    Uses multi-process pooling across all visible GPUs when more than one
+    is available, falling back to single-device inference otherwise.
+
     Returns an (N, D) float16 numpy array where the i-th row corresponds
     to the string with embedding_text_id = i.
     """
+    import torch
     from sentence_transformers import SentenceTransformer
 
     logger.info(f"Loading embedding model: {model_name}")
-    model = SentenceTransformer(model_name, device=device)
+    model = SentenceTransformer(
+        model_name,
+        #! Not all embedding models are distributed in bfloat16 and bfloat16 may not be supported by older GPUs (pre-Ampere)
+        model_kwargs={"torch_dtype": torch.bfloat16},
+    )
 
+    gpu_count = torch.cuda.device_count()
     logger.info(
         f"Encoding {len(sorted_strings)} strings "
-        f"(batch_size={batch_size}, device={device})"
+        f"(batch_size={batch_size}, gpus={gpu_count})"
     )
-    embeddings = model.encode(
-        sorted_strings,
-        batch_size=batch_size,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=False,
-    )
+
+    if gpu_count > 1:
+        pool = model.start_multi_process_pool()
+        embeddings = model.encode_multi_process(
+            sorted_strings, pool, batch_size=batch_size,
+        )
+        model.stop_multi_process_pool(pool)
+    else:
+        model = model.to(device)
+        embeddings = model.encode(
+            sorted_strings,
+            batch_size=batch_size,
+            show_progress_bar=True,
+            convert_to_numpy=True,
+            normalize_embeddings=False,
+        )
 
     embeddings = embeddings.astype(np.float16)
     logger.info(f"Embedding table shape: {embeddings.shape}, dtype: {embeddings.dtype}")

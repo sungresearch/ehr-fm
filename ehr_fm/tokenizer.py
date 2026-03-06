@@ -663,7 +663,7 @@ def pretokenize_data(
     pool: Pool | None = None
     results_iterable: Iterable
 
-    if effective_num_workers > 0:
+    if effective_num_workers > 1:
         pool_initargs = (
             vocab_path,
             inject_time_intervals,

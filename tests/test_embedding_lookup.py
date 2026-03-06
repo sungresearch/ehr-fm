@@ -133,20 +133,40 @@ class TestComputeStringSetHash:
 
 
 class TestEncodeStrings:
+    @patch("torch.cuda.device_count", return_value=0)
     @patch("sentence_transformers.SentenceTransformer")
-    def test_encode_calls_model(self, mock_st_class):
+    def test_encode_single_gpu(self, mock_st_class, _mock_device_count):
         mock_model = MagicMock()
         fake_embeddings = np.random.randn(3, 16).astype(np.float32)
+        mock_model.to.return_value = mock_model
         mock_model.encode.return_value = fake_embeddings
         mock_st_class.return_value = mock_model
 
         result = encode_strings(["a", "b", "c"], "test-model", batch_size=2, device="cpu")
 
-        mock_st_class.assert_called_once_with("test-model", device="cpu")
+        mock_st_class.assert_called_once_with(
+            "test-model", model_kwargs={"torch_dtype": torch.bfloat16},
+        )
+        mock_model.to.assert_called_once_with("cpu")
         mock_model.encode.assert_called_once()
         assert result.dtype == np.float16
         assert result.shape == (3, 16)
-        np.testing.assert_array_almost_equal(result, fake_embeddings.astype(np.float16), decimal=2)
+
+    @patch("torch.cuda.device_count", return_value=3)
+    @patch("sentence_transformers.SentenceTransformer")
+    def test_encode_multi_gpu(self, mock_st_class, _mock_device_count):
+        mock_model = MagicMock()
+        fake_embeddings = np.random.randn(3, 16).astype(np.float32)
+        mock_model.encode_multi_process.return_value = fake_embeddings
+        mock_st_class.return_value = mock_model
+
+        result = encode_strings(["a", "b", "c"], "test-model", batch_size=2, device="cuda")
+
+        mock_model.start_multi_process_pool.assert_called_once()
+        mock_model.encode_multi_process.assert_called_once()
+        mock_model.stop_multi_process_pool.assert_called_once()
+        assert result.dtype == np.float16
+        assert result.shape == (3, 16)
 
 
 class TestSerializeAndLookup:
