@@ -4,10 +4,9 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "ehr_fm"
-version = "0.0.3"
+version = "0.1.0"
 description = "A package to train Foundation Models leveraging the MEDS EHR data format"
 authors = [
-    "Santiago Eduardo Arciniegas <santiago.arciniegas@sickkids.ca>",
     "Lin Lawrence Guo <lawrence.guo@sickkids.ca>",
 ]
 packages = [
@@ -15,10 +14,10 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"
+python = ">=3.10,<3.14"
 polars = "~1.27.0"
 pydantic = "~2.11.0"
-meds-reader = "0.1.9"
+meds-reader = "0.1.16"
 meds = "0.3.3"
 pyyaml = "~6.0.2"
 torch = "~2.7.0"
@@ -26,7 +25,6 @@ torch-optimi = "~0.2.1"
 transformers = "~4.51.0"
 datasets = "~3.5.0"
 accelerate = "~1.6.0"
-xformers = "0.0.30"
 wandb = "~0.19.11"
 
 [tool.poetry.scripts]
