@@ -28,6 +28,8 @@ datasets = "~3.5.0"
 accelerate = "~1.6.0"
 xformers = "0.0.30"
 wandb = "~0.19.11"
+sentence-transformers = "~=5.2.3"
+safetensors = "~=0.7.0"
 
 [tool.poetry.scripts]
 pretokenize = "ehr_fm.scripts.pretokenize:main"
@@ -35,6 +37,7 @@ train_vocabulary = "ehr_fm.scripts.train_vocabulary:main"
 compute_representations = "ehr_fm.scripts.compute_representations:main"
 train_ehr_fm = "ehr_fm.scripts.train_ehr_fm:main"
 apply_meds_transforms = "ehr_fm.scripts.apply_meds_transforms:main"
+build_embedding_lookup = "ehr_fm.scripts.build_embedding_lookup:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
