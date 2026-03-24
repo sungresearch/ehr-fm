@@ -64,6 +64,12 @@ def packed_ehr_collate(batch):
         },
     }
 
+    # Embedding mode fields
+    if "embedding_text_ids" in batch[0]:
+        result["embedding_text_ids"] = torch.cat([ex["embedding_text_ids"] for ex in batch])
+    if "numeric_features" in batch[0]:
+        result["numeric_features"] = torch.cat([ex["numeric_features"] for ex in batch])
+
     return result
 
 
@@ -184,7 +190,11 @@ class DenseTransformer(nn.Module):
         self.in_norm = RMSNorm(config.hidden_size)
         self.out_norm = RMSNorm(config.hidden_size)
 
-        self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
+        if getattr(config, "input_mode", "discrete") == "embedding":
+            # Placeholder — set via set_input_encoder() after model creation
+            self.embed = None
+        else:
+            self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
 
         self.layers = nn.ModuleList([DenseTransformerDecoderLayer(config) for _ in range(config.n_layers)])
 
@@ -198,8 +208,15 @@ class DenseTransformer(nn.Module):
         else:
             self._dense_mask = [(i % interval == 0) for i in range(config.n_layers)]
 
+    def set_input_encoder(self, encoder: nn.Module) -> None:
+        """Replace the embedding layer with a DualPathInputEncoder."""
+        self.embed = encoder
+
     def forward(self, batch: Mapping[str, Any]) -> torch.Tensor:
-        x = self.embed(batch["input_ids"])
+        if getattr(self.config, "input_mode", "discrete") == "embedding":
+            x = self.embed(batch["embedding_text_ids"], batch.get("numeric_features"))
+        else:
+            x = self.embed(batch["input_ids"])
 
         x = self.in_norm(x)
         head_dim = self.config.hidden_size // self.config.n_heads
@@ -245,7 +262,10 @@ class EHRFM(transformers.PreTrainedModel):
         if "task" in kwargs:
             config.task = kwargs["task"]
 
-        self.main_input_name = "input_ids"
+        if getattr(config.transformer, "input_mode", "discrete") == "embedding":
+            self.main_input_name = "embedding_text_ids"
+        else:
+            self.main_input_name = "input_ids"
 
         self.transformer = DenseTransformer(config.transformer)
 

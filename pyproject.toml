@@ -36,6 +36,8 @@ compute_representations = "ehr_fm.scripts.compute_representations:main"
 train_ehr_fm = "ehr_fm.scripts.train_ehr_fm:main"
 apply_meds_transforms = "ehr_fm.scripts.apply_meds_transforms:main"
 build_embedding_lookup = "ehr_fm.scripts.build_embedding_lookup:main"
+pretokenize_embedding = "ehr_fm.scripts.pretokenize_embedding:main"
+compute_numeric_stats = "ehr_fm.scripts.compute_numeric_stats:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

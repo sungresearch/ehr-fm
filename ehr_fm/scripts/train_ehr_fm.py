@@ -12,9 +12,10 @@ from transformers.trainer_pt_utils import get_parameter_names
 from ehr_fm.callbacks import TopKCheckpointCallback, VariableSaveFrequencyCallback
 from ehr_fm.cli_utils import normalize_resume_checkpoint, str_to_bool
 from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
+from ehr_fm.embedding.lookup import EmbeddingLookup
 from ehr_fm.io import read_json_yaml
 from ehr_fm.logger import setup_logging
-from ehr_fm.models import EHRFM, packed_ehr_collate
+from ehr_fm.models import EHRFM, DualPathInputEncoder, packed_ehr_collate
 from ehr_fm.models.config import EHRFMConfig
 from ehr_fm.trainer import FMTrainer
 
@@ -182,6 +183,8 @@ def _detect_positions_mode(dataset, logger) -> bool:
 
 
 def prepare_model(args, device, logger):
+    input_mode = getattr(args, "input_mode", "discrete")
+
     transformer_config_dict = {
         "vocab_size": args.vocab_size,
         "hidden_size": args.hidden_size,
@@ -198,7 +201,15 @@ def prepare_model(args, device, logger):
         "rope_base_sparse": args.rope_base_sparse,
         "rope_base_global": args.rope_base_global,
         "separate_rope_by_attention": args.separate_rope_by_attention,
+        "input_mode": input_mode,
     }
+
+    if input_mode == "embedding":
+        embedding_lookup = EmbeddingLookup(args.embedding_lookup_path)
+        transformer_config_dict["embedding_dim"] = embedding_lookup.embedding_dim
+        transformer_config_dict["use_numerical_path"] = args.use_numerical_path
+        transformer_config_dict["numerical_input_dim"] = args.numerical_input_dim
+        transformer_config_dict["numerical_hidden_dim"] = args.numerical_hidden_dim
 
     cfg = EHRFMConfig(
         transformer=transformer_config_dict,
@@ -210,14 +221,27 @@ def prepare_model(args, device, logger):
 
     if args.initial_weights_path:
         logger.info(f"Initializing model from pretrained weights: {args.initial_weights_path}")
-        # We use from_pretrained but enforce our config.
-        # This ensures we use the architecture defined by our args/config,
-        # not the config.json in the checkpoint directory (if it exists).
-        # We set ignore_mismatched_sizes=False (default) to enforce strict loading.
         model = EHRFM.from_pretrained(args.initial_weights_path, config=cfg)
     else:
         logger.info("Initializing model with random weights.")
         model = EHRFM(cfg)
+
+    # Wire up the dual-path input encoder in embedding mode
+    if input_mode == "embedding":
+        freeze = getattr(args, "freeze_text_embedding", True)
+        text_embedding = embedding_lookup.as_torch_embedding(freeze=freeze)
+        encoder = DualPathInputEncoder(
+            text_embedding=text_embedding,
+            hidden_size=args.hidden_size,
+            use_numerical_path=args.use_numerical_path,
+            numerical_input_dim=args.numerical_input_dim,
+            numerical_hidden_dim=args.numerical_hidden_dim,
+        )
+        model.transformer.set_input_encoder(encoder)
+        logger.info(
+            f"Embedding mode: dim={embedding_lookup.embedding_dim}, "
+            f"numerical_path={args.use_numerical_path}, freeze={freeze}"
+        )
 
     model = model.to(device)
     model.train()
@@ -633,6 +657,52 @@ def main():
             "If False, use rope_base_global for all layers (backward compatible). "
             "(DenseTransformerConfig default: False)"
         ),
+    )
+
+    # Embedding Mode Arguments
+    embed_args = parser.add_argument_group("Embedding Mode Arguments")
+    embed_args.add_argument(
+        "--input_mode",
+        type=str,
+        default="discrete",
+        choices=["discrete", "embedding"],
+        help="Input mode: 'discrete' for token IDs, 'embedding' for dual-path text embeddings.",
+    )
+    embed_args.add_argument(
+        "--embedding_lookup_path",
+        type=str,
+        default=None,
+        help="Path to embedding lookup artifacts directory (required for embedding mode).",
+    )
+    embed_args.add_argument(
+        "--use_numerical_path",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to use the FiLM numerical encoder. Use --no-use_numerical_path for text-only mode.",
+    )
+    embed_args.add_argument(
+        "--freeze_text_embedding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to freeze the text embedding table.",
+    )
+    embed_args.add_argument(
+        "--numerical_input_dim",
+        type=int,
+        default=5,
+        help="Dimension of the numerical feature vector.",
+    )
+    embed_args.add_argument(
+        "--numerical_hidden_dim",
+        type=int,
+        default=128,
+        help="Hidden dimension of the NumericalEncoder MLP.",
+    )
+    embed_args.add_argument(
+        "--numeric_stats_path",
+        type=str,
+        default=None,
+        help="Path to numeric_stats.json (optional, for logging).",
     )
 
     training_args_group = parser.add_argument_group("HuggingFace Training Arguments")

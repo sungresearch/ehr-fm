@@ -23,6 +23,11 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
         rope_base_sparse: float = 100.0,
         rope_base_global: float = 10000.0,
         separate_rope_by_attention: bool = False,
+        input_mode: str = "discrete",
+        embedding_dim: int = 4096,
+        use_numerical_path: bool = True,
+        numerical_input_dim: int = 5,
+        numerical_hidden_dim: int = 128,
         **kwargs,
     ) -> None:
         """Defines a configuration for an EHRFM Transformer.
@@ -46,6 +51,11 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
                             theta ~100M (extended range for long sequences)
             separate_rope_by_attention: If True, use different RoPE configurations for sparse vs global attention.
                                       If False, use rope_base_global for all layers
+            input_mode: "discrete" for standard token embedding, "embedding" for dual-path text embedding input
+            embedding_dim: Dimension of the frozen text embeddings (default 4096 for Qwen3-Embedding-8B)
+            use_numerical_path: Whether to use the FiLM numerical encoder (False = text-only mode)
+            numerical_input_dim: Dimension of the numerical feature vector
+            numerical_hidden_dim: Hidden dimension of the NumericalEncoder MLP
         """
         super().__init__(**kwargs)
 
@@ -72,6 +82,12 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
         self.rope_base_sparse = rope_base_sparse
         self.rope_base_global = rope_base_global
         self.separate_rope_by_attention = separate_rope_by_attention
+
+        self.input_mode = input_mode
+        self.embedding_dim = embedding_dim
+        self.use_numerical_path = use_numerical_path
+        self.numerical_input_dim = numerical_input_dim
+        self.numerical_hidden_dim = numerical_hidden_dim
 
 
 class EHRFMConfig(transformers.PretrainedConfig):
