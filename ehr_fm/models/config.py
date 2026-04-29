@@ -28,6 +28,10 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
         use_numerical_path: bool = True,
         numerical_input_dim: int = 5,
         numerical_hidden_dim: int = 128,
+        numerical_n_layers: int = 2,
+        numerical_activation: str = "gelu",
+        numerical_combiner: str = "film",
+        numeric_pathway_mode: str = "legacy_zscore",
         **kwargs,
     ) -> None:
         """Defines a configuration for an EHRFM Transformer.
@@ -56,6 +60,28 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
             use_numerical_path: Whether to use the FiLM numerical encoder (False = text-only mode)
             numerical_input_dim: Dimension of the numerical feature vector
             numerical_hidden_dim: Hidden dimension of the NumericalEncoder MLP
+            numerical_n_layers: Number of Linear layers inside the numeric MLP. Default 2 reproduces
+                the original 2-Linear-with-GELU structure exactly. Larger values stack more
+                Linear+activation pairs before the combiner head(s). Default-equivalent for
+                checkpoints saved before this knob was added.
+            numerical_activation: Activation between Linear layers in the numeric MLP. Default
+                "gelu" matches the original behavior. Options: "gelu", "relu", "silu", "tanh".
+                Default-equivalent for checkpoints saved before this knob was added.
+            numerical_combiner: How the numeric pathway is combined with the text-projected
+                hidden state. Default "film" matches the original FiLM-style modulation
+                (gamma * projected + beta) and is the *only* mode used for any checkpoint
+                saved before this knob existed. Options:
+                "film": gamma/beta FiLM modulation (default).
+                "add": projected + numeric_residual (residual-add combiner).
+                "concat_proj": Linear(cat([projected, numeric_proj])) (concat then project).
+                Different combiners produce different state_dict keys; switching combiners
+                requires retraining (no migration path between them).
+            numeric_pathway_mode: Which numeric feature construction was used for pretokenization.
+                "legacy_zscore" (default): 5-dim vector [log_zscore, quantile, ref_range_pos, ref_range_avail, present].
+                "ref_range_priority": 4-dim institution-invariant vector [x_primary, is_refrange, is_log1p, present].
+                "fourier_ref_range_priority": 15-dim vector [fourier(12), is_refrange, is_log1p, present].
+                    Same scalar+flag logic as ref_range_priority; x_primary replaced by sinusoidal expansion.
+                Serialized into checkpoint config.json for compatibility verification.
         """
         super().__init__(**kwargs)
 
@@ -88,6 +114,10 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
         self.use_numerical_path = use_numerical_path
         self.numerical_input_dim = numerical_input_dim
         self.numerical_hidden_dim = numerical_hidden_dim
+        self.numerical_n_layers = numerical_n_layers
+        self.numerical_activation = numerical_activation
+        self.numerical_combiner = numerical_combiner
+        self.numeric_pathway_mode = numeric_pathway_mode
 
 
 class EHRFMConfig(transformers.PretrainedConfig):
