@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -145,7 +144,8 @@ class TestEncodeStrings:
         result = encode_strings(["a", "b", "c"], "test-model", batch_size=2, device="cpu")
 
         mock_st_class.assert_called_once_with(
-            "test-model", model_kwargs={"torch_dtype": torch.bfloat16},
+            "test-model",
+            model_kwargs={"torch_dtype": torch.bfloat16},
         )
         mock_model.to.assert_called_once_with("cpu")
         mock_model.encode.assert_called_once()

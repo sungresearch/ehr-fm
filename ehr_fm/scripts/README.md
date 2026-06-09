@@ -233,11 +233,11 @@ Boolean flags (`--fp16`, `--bf16`, `--load_best_model_at_end`, `--greater_is_bet
 
 This flag controls checkpoint resumption and accepts three kinds of values:
 
-| Value | Meaning |
-|---|---|
-| `null` (YAML) / omitted | Start training from scratch. |
+| Value                                                | Meaning                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `null` (YAML) / omitted                              | Start training from scratch.                                                                                                                                                                                                                                   |
 | `true` (YAML) or `True` / `true` / `yes` / `1` (CLI) | **Auto-detect**: resume from the latest checkpoint found in `output_dir`. Regular checkpoints (`checkpoint-{step}`) are preferred; top-K checkpoints (`checkpoint-topk-{step}`) are used as a fallback. If no checkpoints exist, training starts from scratch. |
-| A path string (e.g. `/path/to/checkpoint-5000`) | Resume from that specific checkpoint directory. |
+| A path string (e.g. `/path/to/checkpoint-5000`)      | Resume from that specific checkpoint directory.                                                                                                                                                                                                                |
 
 ### Required Arguments
 

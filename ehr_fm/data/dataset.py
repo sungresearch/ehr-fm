@@ -268,8 +268,12 @@ class TokenizedDataset(Dataset):
         slice_age = ages[start:end]
         slice_ages_norm = ages_norm[start:end]
 
-        slice_emb_ids = extra.get("embedding_text_ids", [None])[start:end] if "embedding_text_ids" in extra else None
-        slice_num_feat = extra.get("numeric_features", [None])[start:end] if "numeric_features" in extra else None
+        slice_emb_ids = (
+            extra.get("embedding_text_ids", [None])[start:end] if "embedding_text_ids" in extra else None
+        )
+        slice_num_feat = (
+            extra.get("numeric_features", [None])[start:end] if "numeric_features" in extra else None
+        )
 
         # Apply dropout to the slice if needed
         if self.dropout_prob > 0.0 and len(slice_tok) > 0:

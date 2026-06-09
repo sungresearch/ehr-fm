@@ -72,20 +72,20 @@ def encode_strings(
     logger.info(f"Loading embedding model: {model_name}")
     model = SentenceTransformer(
         model_name,
-        #! Not all embedding models are distributed in bfloat16 and bfloat16 may not be supported by older GPUs (pre-Ampere)
+        # Not all embedding models ship in bfloat16, and bfloat16 is unsupported
+        # on pre-Ampere GPUs.
         model_kwargs={"torch_dtype": torch.bfloat16},
     )
 
     gpu_count = torch.cuda.device_count()
-    logger.info(
-        f"Encoding {len(sorted_strings)} strings "
-        f"(batch_size={batch_size}, gpus={gpu_count})"
-    )
+    logger.info(f"Encoding {len(sorted_strings)} strings " f"(batch_size={batch_size}, gpus={gpu_count})")
 
     if gpu_count > 1:
         pool = model.start_multi_process_pool()
         embeddings = model.encode_multi_process(
-            sorted_strings, pool, batch_size=batch_size,
+            sorted_strings,
+            pool,
+            batch_size=batch_size,
         )
         model.stop_multi_process_pool(pool)
     else:

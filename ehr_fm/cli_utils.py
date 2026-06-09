@@ -32,8 +32,7 @@ def str_to_bool(value: str | bool) -> bool:
     import argparse
 
     raise argparse.ArgumentTypeError(
-        f"Boolean value expected, got '{value}'. "
-        "Accepted values: true/false, yes/no, 1/0."
+        f"Boolean value expected, got '{value}'. " "Accepted values: true/false, yes/no, 1/0."
     )
 
 
