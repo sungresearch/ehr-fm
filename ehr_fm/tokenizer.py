@@ -145,6 +145,7 @@ def _pretokenize_init_worker(
     sex_codes_male: str | None = None,
     sex_codes_female: str | None = None,
     sex_codes_unknown: str | None = None,
+    quantile_breaks_override_path: PathLike | None = None,
 ):
     global _pretok_policy_instance, _pretok_token_lookup
     global _pretok_worker_config, _pretok_demo_lookup
@@ -182,6 +183,23 @@ def _pretokenize_init_worker(
     tokenization_mode = vocab_config.get("tokenization_mode")
 
     quantile_breaks = vocab_data.get("quantile_breaks", {})
+
+    if quantile_breaks_override_path:
+        override_data = read_json_yaml(quantile_breaks_override_path)
+        if isinstance(override_data, dict) and "quantile_breaks" in override_data:
+            override_breaks = override_data["quantile_breaks"]
+        else:
+            override_breaks = override_data
+        replaced = 0
+        for code, breaks in override_breaks.items():
+            if code in quantile_breaks:
+                quantile_breaks[code] = breaks
+                replaced += 1
+        logger.info(
+            f"Quantile breaks override: replaced {replaced}/{len(override_breaks)} codes "
+            f"(overlap-only with {len(quantile_breaks)} vocab codes)"
+        )
+
     known_stages = set(vocab_data.get("discovered_stages", []))
 
     _pretok_token_lookup = _build_token_string_lookup(vocab_entries)
@@ -591,6 +609,7 @@ def pretokenize_data(
     sex_codes_male: str | None = None,
     sex_codes_female: str | None = None,
     sex_codes_unknown: str | None = None,
+    quantile_breaks_override_path: PathLike | None = None,
 ):
     """Pretokenize MEDS data and write the result as Parquet."""
 
@@ -673,6 +692,7 @@ def pretokenize_data(
             sex_codes_male,
             sex_codes_female,
             sex_codes_unknown,
+            quantile_breaks_override_path,
         )
         pool = Pool(effective_num_workers, initializer=_pretokenize_init_worker, initargs=pool_initargs)
         results_iterable = pool.imap_unordered(process_row_configured, dataset)
@@ -686,6 +706,7 @@ def pretokenize_data(
             sex_codes_male,
             sex_codes_female,
             sex_codes_unknown,
+            quantile_breaks_override_path,
         )
         results_iterable = map(process_row_configured, dataset)
 

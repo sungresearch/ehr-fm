@@ -52,6 +52,14 @@ def parse_args():
         default="patients_tokenized.parquet",
         help="Name of the output Parquet file",
     )
+    ap.add_argument(
+        "--quantile_breaks_override_path",
+        type=str,
+        default=None,
+        help="Override quantile breaks for overlapping codes. Accepts a vocab.json "
+        "(extracts 'quantile_breaks' key) or a bare {code: [breaks]} JSON dict. "
+        "Only codes already present in the main vocab's breaks are replaced.",
+    )
 
     # Time-interval and demographic arguments
     ap.add_argument(
@@ -119,6 +127,7 @@ def main():
         sex_codes_male=args.sex_codes_male,
         sex_codes_female=args.sex_codes_female,
         sex_codes_unknown=args.sex_codes_unknown,
+        quantile_breaks_override_path=args.quantile_breaks_override_path,
     )
 
 
