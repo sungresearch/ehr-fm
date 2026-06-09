@@ -208,8 +208,25 @@ def prepare_model(args, device, logger):
         embedding_lookup = EmbeddingLookup(args.embedding_lookup_path)
         transformer_config_dict["embedding_dim"] = embedding_lookup.embedding_dim
         transformer_config_dict["use_numerical_path"] = args.use_numerical_path
-        transformer_config_dict["numerical_input_dim"] = args.numerical_input_dim
         transformer_config_dict["numerical_hidden_dim"] = args.numerical_hidden_dim
+
+        numeric_pathway_mode = getattr(args, "numeric_pathway_mode", "legacy_zscore")
+        mode_to_dim = {"legacy_zscore": 5, "ref_range_priority": 4}
+        expected_dim = mode_to_dim[numeric_pathway_mode]
+
+        explicit_dim = getattr(args, "numerical_input_dim", None)
+        if explicit_dim is not None and explicit_dim != expected_dim:
+            logger.warning(
+                f"--numerical_input_dim={explicit_dim} conflicts with "
+                f"--numeric_pathway_mode={numeric_pathway_mode} (expects {expected_dim}). "
+                f"Using explicit value {explicit_dim}."
+            )
+            numerical_input_dim = explicit_dim
+        else:
+            numerical_input_dim = expected_dim
+
+        transformer_config_dict["numerical_input_dim"] = numerical_input_dim
+        transformer_config_dict["numeric_pathway_mode"] = numeric_pathway_mode
 
     cfg = EHRFMConfig(
         transformer=transformer_config_dict,
@@ -234,7 +251,7 @@ def prepare_model(args, device, logger):
             text_embedding=text_embedding,
             hidden_size=args.hidden_size,
             use_numerical_path=args.use_numerical_path,
-            numerical_input_dim=args.numerical_input_dim,
+            numerical_input_dim=numerical_input_dim,
             numerical_hidden_dim=args.numerical_hidden_dim,
         )
         model.transformer.set_input_encoder(encoder)
@@ -687,10 +704,20 @@ def main():
         help="Whether to freeze the text embedding table.",
     )
     embed_args.add_argument(
+        "--numeric_pathway_mode",
+        type=str,
+        choices=["legacy_zscore", "ref_range_priority"],
+        default="legacy_zscore",
+        help="Numeric feature construction mode used during pretokenization. "
+        "'legacy_zscore': 5-dim features (default). 'ref_range_priority': 4-dim features. "
+        "Automatically sets numerical_input_dim unless explicitly overridden.",
+    )
+    embed_args.add_argument(
         "--numerical_input_dim",
         type=int,
-        default=5,
-        help="Dimension of the numerical feature vector.",
+        default=None,
+        help="Dimension of the numerical feature vector. Auto-derived from numeric_pathway_mode "
+        "if not set (legacy_zscore=5, ref_range_priority=4).",
     )
     embed_args.add_argument(
         "--numerical_hidden_dim",
