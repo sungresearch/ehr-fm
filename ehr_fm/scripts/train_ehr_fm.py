@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 from torch.optim import AdamW
 from transformers import EarlyStoppingCallback, TrainingArguments
+from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.trainer_pt_utils import get_parameter_names
 
 from ehr_fm.callbacks import VariableSaveFrequencyCallback
@@ -24,8 +25,10 @@ def build_optimizer(config: dict, model: torch.nn.Module, logger) -> torch.optim
     """Build an optimizer from *config* (keys: name, lr, betas, eps, weight_decay)."""
     optimizer_name = config["name"]
 
-    # Separate parameters for weight decay. We don't want to apply decay to biases, LayerNorm weights, or embeddings.
-    decay_parameters = get_parameter_names(model, [torch.nn.LayerNorm])
+    # Separate parameters for weight decay. We don't want to apply decay to biases,
+    # normalization weights, or embeddings. ALL_LAYERNORM_LAYERS includes the custom
+    # RMSNorm (registered in models/utils.py), so its weights are excluded as well.
+    decay_parameters = get_parameter_names(model, ALL_LAYERNORM_LAYERS)
     decay_parameters = [name for name in decay_parameters if "bias" not in name and "embed" not in name]
 
     params_to_optimize = [

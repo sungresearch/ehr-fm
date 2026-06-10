@@ -29,6 +29,10 @@ wandb = "~0.19.11"
 sentence-transformers = "~=5.2.3"
 safetensors = "~=0.7.0"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "~9.0.2"
+pytest-cov = "~7.1.0"
+
 [tool.poetry.scripts]
 pretokenize = "ehr_fm.scripts.pretokenize:main"
 train_vocabulary = "ehr_fm.scripts.train_vocabulary:main"

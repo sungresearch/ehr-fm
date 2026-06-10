@@ -43,12 +43,14 @@ def test_build_optimizer_weight_decay_grouping():
     decayed = {id_to_name[id(p)] for p in by_wd[0.1]["params"]}
     not_decayed = {id_to_name[id(p)] for p in by_wd[0.0]["params"]}
 
-    # Biases and embeddings must NOT be weight-decayed.
+    # Biases, embeddings, and normalization (RMSNorm) weights must NOT be weight-decayed.
     assert not any("bias" in n for n in decayed)
     assert not any("embed" in n for n in decayed)
+    assert not any("norm" in n.lower() for n in decayed)
     # ...and they are present in the no-decay group.
     assert any("bias" in n for n in not_decayed)
     assert any("embed" in n for n in not_decayed)
+    assert any("norm" in n.lower() for n in not_decayed)
 
     # The two groups exactly partition every trainable parameter.
     trainable = {n for n, p in model.named_parameters() if p.requires_grad}
