@@ -17,11 +17,12 @@ import torch
 from safetensors.torch import save_file as save_safetensors
 from torch import nn
 
+from ehr_fm.data import packed_ehr_collate
 from ehr_fm.data.dataset import TokenizedDataset
 from ehr_fm.logger import setup_logging
 from ehr_fm.models import DualPathInputEncoder
 from ehr_fm.models.config import EHRFMConfig
-from ehr_fm.models.transformer import EHRFM, packed_ehr_collate
+from ehr_fm.models.transformer import EHRFM
 from ehr_fm.scripts.compute_representations import (
     _load_encoder_weights,
     create_representations,

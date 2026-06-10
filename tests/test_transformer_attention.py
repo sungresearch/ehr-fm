@@ -11,8 +11,9 @@ Covers properties the rest of the suite relies on but never asserts:
 
 import torch
 
+from ehr_fm.data import packed_ehr_collate
 from ehr_fm.models.config import EHRFMConfig
-from ehr_fm.models.transformer import EHRFM, _fixed_pos_embedding, packed_ehr_collate
+from ehr_fm.models.transformer import EHRFM, _fixed_pos_embedding
 
 
 def _discrete_model(n_layers=2, attention_width=8, alternating=True):

@@ -154,7 +154,7 @@ class TestEmbeddingCollation:
     """Test packed_ehr_collate with embedding mode fields."""
 
     def test_collate_with_embedding_fields(self):
-        from ehr_fm.models.transformer import packed_ehr_collate
+        from ehr_fm.data import packed_ehr_collate
 
         batch = [
             {
@@ -192,7 +192,7 @@ class TestEmbeddingCollation:
 
     def test_collate_with_dim4_numeric_features(self):
         """ref_range_priority: 4-dim numeric features collate by concatenation, values intact."""
-        from ehr_fm.models.transformer import packed_ehr_collate
+        from ehr_fm.data import packed_ehr_collate
 
         f1 = torch.tensor([[0.5, 1.0, 0.0, 1.0], [0.2, 0.0, 1.0, 1.0]])
         f2 = torch.tensor([[1.5, 1.0, 0.0, 1.0]])
@@ -226,7 +226,7 @@ class TestEmbeddingCollation:
 
     def test_collate_with_dim15_numeric_features(self):
         """fourier_ref_range_priority: 15-dim numeric features collate, values intact."""
-        from ehr_fm.models.transformer import packed_ehr_collate
+        from ehr_fm.data import packed_ehr_collate
 
         feats = torch.arange(2 * 15, dtype=torch.float32).reshape(2, 15)
         batch = [
@@ -248,7 +248,7 @@ class TestEmbeddingCollation:
 
     def test_collate_without_embedding_fields(self):
         """Backward compat: batch without embedding fields still works."""
-        from ehr_fm.models.transformer import packed_ehr_collate
+        from ehr_fm.data import packed_ehr_collate
 
         batch = [
             {

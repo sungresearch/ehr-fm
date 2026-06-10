@@ -11,11 +11,11 @@ from safetensors.torch import load_file as load_safetensors
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
+from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset, packed_ehr_collate
 from ehr_fm.embedding.lookup import EmbeddingLookup
 from ehr_fm.logger import setup_logging
 from ehr_fm.models import DualPathInputEncoder
-from ehr_fm.models.transformer import EHRFM, packed_ehr_collate
+from ehr_fm.models.transformer import EHRFM
 from ehr_fm.tokenizer import pretokenize_data
 
 

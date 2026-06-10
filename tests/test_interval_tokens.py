@@ -16,8 +16,8 @@ import pyarrow.parquet as pq
 import pytest
 import torch
 
+from ehr_fm.data import packed_ehr_collate
 from ehr_fm.data.dataset import TokenizedDataset
-from ehr_fm.models.transformer import packed_ehr_collate
 
 # -----------------------------------------------------------------------------
 # Test 2.1: Flat Interval Tokens

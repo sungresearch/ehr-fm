@@ -12,11 +12,11 @@ from transformers.trainer_pt_utils import get_parameter_names
 
 from ehr_fm.callbacks import VariableSaveFrequencyCallback
 from ehr_fm.cli_utils import normalize_resume_checkpoint, str_to_bool
-from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
+from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset, packed_ehr_collate
 from ehr_fm.embedding.lookup import EmbeddingLookup
 from ehr_fm.io import read_json_yaml
 from ehr_fm.logger import setup_logging
-from ehr_fm.models import EHRFM, DualPathInputEncoder, packed_ehr_collate
+from ehr_fm.models import EHRFM, DualPathInputEncoder
 from ehr_fm.models.config import EHRFMConfig
 from ehr_fm.trainer import FMTrainer
 
