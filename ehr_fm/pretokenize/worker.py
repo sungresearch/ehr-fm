@@ -1,65 +1,18 @@
+"""Pool worker for pretokenization.
+
+Process-global state (policy, token lookup, config, demographic lookup) is built
+once by ``_pretokenize_init_worker`` -- run as the multiprocessing ``Pool``
+initializer in each child process -- and read by ``_pretokenize_process_row``.
+The initializer and the per-row reader deliberately live in the SAME module so
+they share one module-global namespace per worker process; splitting them apart
+would break that contract.
 """
-ehr_fm.tokenizer
-==================
 
-Overview
---------
-Pretokenization pipeline: reads a vocabulary JSON, selects the appropriate
-tokenization policy (imported from ``ehr_fm.tokenization``), and converts MEDS
-events into training‑ready Parquet files.
-
-Components (defined in this module)
-------------------------------------
-- ``PretokenizeWorkerConfig``: Frozen dataclass holding per‑worker configuration
-  (vocab_size, age normalization stats, interval/demographic settings).
-
-- ``_tokenize_event_with_policy()``: Bridges a single MEDS event to the imported
-  ``TokenizationPolicy``, enforcing the no‑orphans invariant (if the base token is
-  OOV, all attribute tokens for that event are dropped) and vocab‑cutoff filtering.
-
-- ``_pretokenize_process_row()``: Per-patient sequence assembly: events, intervals,
-  demographics, ages
-
-- ``pretokenize_data(...)``: Public entry point.  Orchestrates dataset reading,
-  parallel workers, sequence assembly, optional interval injection, demographic
-  prefix, vocab cutoff, and Parquet writing.
-
-Tokenization policies (defined in ``ehr_fm.tokenization``, used here)
-----------------------------------------------------------------------
-- ``JointPolicy``: emits a single combined token per event (e.g., "glucose/Q:3").
-- ``FactorizedPolicy``: emits separate base + attribute tokens (e.g., ["glucose", "Q:3"]).
-- The appropriate policy is instantiated in ``_pretokenize_init_worker`` based on the
-  ``tokenization_mode`` field in the vocabulary config.
-
-Temporal interval tokens
-------------------------
-- Enabled by CLI flags passed through pretokenize:
-  --inject_time_intervals, --max_interval_repeat.
-- Default scheme bins (min‑inclusive, max‑exclusive), month = 30 days:
-  5m–15m, 15m–1h, 1h–2h, 2h–6h, 6h–12h, 12h–1d,
-  1d–3d, 3d–1w, 1w–2w, 2w–1mt, 1mt–3mt, 3mt–6mt, and repeatable 6mt.
-  (12 ranged bins + 1 repeatable label = 13 interval tokens total.)
-- Policy:
-  - No interval before the first non‑birth event.
-  - If Δt < smallest bin (5m), insert none.
-  - For Δt ≥ 6 months, emit ceil(Δt / 6mt) repeats of INT_6mt (capped by
-    --max_interval_repeat if set).
-  - For 5m ≤ Δt < 6 months, emit the single matching bin token.
-- Interval tokens are inserted into the token stream with their own age entries.
-"""
-import dataclasses
 import datetime
-import os
-from collections.abc import Iterable
-from functools import partial
-from multiprocessing import Pool, cpu_count
-from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
-from tqdm.auto import tqdm
 
-from .defaults import (
+from ehr_fm.defaults import (
     DEFAULT_INTERVAL_BINS,
     DEFAULT_INTERVAL_LABELS,
     DEFAULT_SEX_CODES,
@@ -67,73 +20,21 @@ from .defaults import (
     DEMO_YEAR_MIN,
     REPEATABLE_INTERVAL_LABEL,
 )
-from .io import read_json_yaml
-from .logger import setup_logging
-from .tokenization import (
+from ehr_fm.io import read_json_yaml
+from ehr_fm.logger import setup_logging
+from ehr_fm.pretokenize.config import PretokenizeWorkerConfig
+from ehr_fm.pretokenize.lookups import (
+    _build_interval_token_lookup,
+    _build_token_string_lookup,
+    _tokenize_event_with_policy,
+)
+from ehr_fm.tokenization import (
     FactorizedConfig,
     FactorizedPolicy,
     JointConfig,
     JointPolicy,
-    TokenizationPolicy,
 )
-from .types import PathLike
-
-
-@dataclasses.dataclass(frozen=True)
-class PretokenizeWorkerConfig:
-    """Immutable configuration for pretokenize worker processes.
-
-    Built once in _pretokenize_init_worker and read by
-    _pretokenize_process_row via a module-level global.
-    """
-
-    vocab_size: int
-    age_mean: float
-    age_std: float
-    inject_time_intervals: bool
-    interval_bins: list[tuple[float, float, str]]
-    max_interval_repeat: int | None
-    interval_token_lookup: dict[str, int]
-    demographic_prefix: bool
-    demographic_include_year: bool
-    sex_codes_male: str | None
-    sex_codes_female: str | None
-    sex_codes_unknown: str | None
-
-    def normalize_age(self, age: datetime.timedelta) -> float:
-        """Normalize age using vocabulary statistics."""
-        return (age.total_seconds() - self.age_mean) / self.age_std
-
-
-def _build_token_string_lookup(vocab: list[dict[str, Any]]) -> dict[str, int]:
-    """Build a lookup from token string to vocab index for factorized tokenization.
-
-    Maps:
-    - code entries: code_string → index
-    - quantile entries: label (Q:*) → index
-    - stage entries: label (STAGE:*) → index
-    - text entries: label (TXT:*) → index
-    - interval entries: label → index
-    - demographic entries: label → index
-    """
-    lookup: dict[str, int] = {}
-    for i, entry in enumerate(vocab):
-        entry_type = entry.get("type")
-        if entry_type == "code":
-            code_string = entry.get("code_string")
-            if code_string:
-                lookup[code_string] = i
-        elif entry_type in ("quantile", "stage", "interval", "demographic"):
-            label = entry.get("label")
-            if label:
-                lookup[label] = i
-        elif entry_type == "text":
-            # Text entries use TXT:<normalized> format
-            text_string = entry.get("text_string")
-            if text_string:
-                lookup[f"TXT:{text_string}"] = i
-        # numeric entries are not used in factorized mode (use Q:* instead)
-    return lookup
+from ehr_fm.types import PathLike
 
 
 def _pretokenize_init_worker(
@@ -278,61 +179,6 @@ def _pretokenize_init_worker(
         f"interval_tokens_present={num_interval_present}/{len(DEFAULT_INTERVAL_LABELS)}, "
         f"demographic_tokens_present={num_demo_present}"
     )
-
-
-def _build_interval_token_lookup(vocab: list[dict[str, Any]]) -> dict[str, int]:
-    lookup: dict[str, int] = {}
-    for i, v in enumerate(vocab):
-        if v.get("type") == "interval":
-            lbl = v.get("label")
-            if isinstance(lbl, str):
-                lookup[lbl] = i
-    return lookup
-
-
-def _tokenize_event_with_policy(
-    event: dict[str, Any],
-    policy: TokenizationPolicy,
-    token_lookup: dict[str, int],
-    vocab_size: int,
-) -> list[int]:
-    """Tokenize a single event using a tokenization policy.
-
-    Works for both joint and factorized modes:
-    - JointPolicy: emits single combined token like "4096101/Q:7"
-    - FactorizedPolicy: emits multiple tokens like ["4096101", "Q:7"]
-
-    Returns list of token IDs. Empty list if base token is OOV (no-orphans invariant).
-
-    Args:
-        event: Event dict with code, numeric_value, text_value, workflow_stage
-        policy: TokenizationPolicy instance (JointPolicy or FactorizedPolicy)
-        token_lookup: token_string → vocab_index mapping
-        vocab_size: Maximum token ID (for cutoff filtering)
-
-    Returns:
-        List of valid token IDs for this event
-    """
-    token_strings = policy.emit_token_strings(event)
-    if not token_strings:
-        return []
-
-    # First token is always the base token - check for OOV
-    base_token_str = token_strings[0]
-    base_tok_id = token_lookup.get(base_token_str)
-
-    # No-orphans invariant: if base token is OOV, skip all tokens for this event
-    if base_tok_id is None or base_tok_id >= vocab_size:
-        return []
-
-    # Collect valid token IDs
-    valid_tokens = [base_tok_id]
-    for token_str in token_strings[1:]:
-        tok_id = token_lookup.get(token_str)
-        if tok_id is not None and tok_id < vocab_size:
-            valid_tokens.append(tok_id)
-
-    return valid_tokens
 
 
 def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
@@ -558,200 +404,3 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
         "age_normalized": pa.array(ages_normalized, type=pa.float32()),
     }
     return arr_dict
-
-
-def _pretokenize_schema() -> pa.Schema:
-    return pa.schema(
-        [
-            pa.field("subject_id", pa.int64()),
-            pa.field("index_time", pa.timestamp("ns")),
-            pa.field("token_ids", pa.list_(pa.int32())),
-            pa.field("age", pa.list_(pa.float32())),
-            pa.field("length", pa.int32()),
-            pa.field("age_normalized", pa.list_(pa.float32())),
-        ]
-    )
-
-
-def _pretokenize_flush(rows, writer, out_dir, file_name="patients_tokenized.parquet", final=False):
-    table = pa.Table.from_pylist(rows, schema=_pretokenize_schema())
-    if writer is None:
-        output_path = os.path.join(out_dir, file_name)
-        writer = pq.ParquetWriter(output_path, table.schema, compression="zstd", use_dictionary=True)
-
-    writer.write_table(table)
-
-    # Explicitly clean up table to free memory immediately
-    del table
-
-    if final:
-        writer.close()
-        writer = None
-
-    return writer
-
-
-def pretokenize_data(
-    vocab_path: PathLike,
-    out_dir: PathLike,
-    dataset_path: PathLike = None,
-    samples_path: PathLike | None = None,
-    split: str | None = None,
-    num_workers: int = -1,
-    max_events_per_patient: int = None,
-    row_group_size: int = 32_768,
-    output_filename: str = "patients_tokenized.parquet",
-    vocab_size: int = None,
-    inject_time_intervals: bool = False,
-    max_interval_repeat: int | None = None,
-    demographic_prefix: bool = False,
-    demographic_include_year: bool = False,
-    sex_codes_male: str | None = None,
-    sex_codes_female: str | None = None,
-    sex_codes_unknown: str | None = None,
-    quantile_breaks_override_path: PathLike | None = None,
-):
-    """Pretokenize MEDS data and write the result as Parquet."""
-
-    from .data import create_dataset
-
-    logger = setup_logging(child_name="pretokenize_data")
-    os.makedirs(out_dir, exist_ok=True)
-    dataset_config = {"split": split}
-
-    if not dataset_path:
-        raise ValueError("Must specify dataset_path")
-
-    # MEDS reader configuration
-    dataset_config["dataset_path"] = dataset_path
-    logger.info(f"Using dataset with auto-detection: {dataset_path}")
-
-    dataset_config["samples_path"] = samples_path
-
-    logger.info(f"Creating dataset with config: {dataset_config}")
-    dataset = create_dataset(dataset_config)
-    logger.info(f"Created {type(dataset).__name__} with {len(dataset)} samples")
-
-    # Upfront configuration summary (single log from main process)
-    try:
-        vocab_data = read_json_yaml(vocab_path)
-        vocab_entries = vocab_data.get("vocab", [])
-        num_interval_present = sum(1 for v in vocab_entries if v.get("type") == "interval")
-        num_demo_present = sum(1 for v in vocab_entries if v.get("type") == "demographic")
-        male_codes = set(sex_codes_male.split(",")) if sex_codes_male else set(DEFAULT_SEX_CODES["male"])
-        female_codes = (
-            set(sex_codes_female.split(",")) if sex_codes_female else set(DEFAULT_SEX_CODES["female"])
-        )
-        unknown_codes = (
-            set(sex_codes_unknown.split(",")) if sex_codes_unknown else set(DEFAULT_SEX_CODES["unknown"])
-        )
-
-        def _preview(s: set[str]) -> str:
-            items = sorted(s)
-            return ", ".join(items[:5]) + (" ..." if len(items) > 5 else "")
-
-        logger.info(
-            "Pretokenize configuration (main): "
-            f"inject_time_intervals={inject_time_intervals}, demographic_prefix={demographic_prefix}, "
-            f"max_interval_repeat={max_interval_repeat}, "
-            f"interval_tokens_present={num_interval_present}/{len(DEFAULT_INTERVAL_LABELS)}, "
-            f"demographic_tokens_present={num_demo_present}, "
-            f"sex_codes: male({len(male_codes)}: {_preview(male_codes)}), "
-            f"female({len(female_codes)}: {_preview(female_codes)}), "
-            f"unknown({len(unknown_codes)}: {_preview(unknown_codes)})"
-        )
-    except Exception:
-        # Non-fatal: continue even if summary cannot be produced
-        pass
-
-    writer = None
-    flush_count = 0
-    processed_count = 0
-    written_count = 0
-    none_count = 0
-    skip_reasons: dict[str, int] = {}
-
-    effective_num_workers = cpu_count() if num_workers == -1 else num_workers
-
-    process_row_configured = partial(
-        _pretokenize_process_row,
-        current_max_events=max_events_per_patient,
-        vocab_size=vocab_size,
-    )
-
-    pool: Pool | None = None
-    results_iterable: Iterable
-
-    if effective_num_workers > 1:
-        pool_initargs = (
-            vocab_path,
-            inject_time_intervals,
-            max_interval_repeat,
-            demographic_prefix,
-            demographic_include_year,
-            sex_codes_male,
-            sex_codes_female,
-            sex_codes_unknown,
-            quantile_breaks_override_path,
-        )
-        pool = Pool(effective_num_workers, initializer=_pretokenize_init_worker, initargs=pool_initargs)
-        results_iterable = pool.imap_unordered(process_row_configured, dataset)
-    else:
-        _pretokenize_init_worker(
-            vocab_path,
-            inject_time_intervals,
-            max_interval_repeat,
-            demographic_prefix,
-            demographic_include_year,
-            sex_codes_male,
-            sex_codes_female,
-            sex_codes_unknown,
-            quantile_breaks_override_path,
-        )
-        results_iterable = map(process_row_configured, dataset)
-
-    flat_batch = []
-
-    with tqdm(total=len(dataset), desc="pretokenize_data") as bar:
-        for out in results_iterable:
-            bar.update()
-            processed_count += 1
-            if out is None:
-                none_count += 1
-                continue
-            if isinstance(out, dict) and "_skip_reason" in out:
-                reason = out["_skip_reason"]
-                skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
-                continue
-            flat_batch.append(out)
-            written_count += 1
-
-            if len(flat_batch) == row_group_size:
-                writer = _pretokenize_flush(flat_batch, writer, out_dir, file_name=output_filename)
-                flat_batch = []
-                flush_count += 1
-
-    # Final flush
-    if flat_batch:
-        _pretokenize_flush(flat_batch, writer, out_dir, file_name=output_filename, final=True)
-    elif writer:
-        writer.close()
-
-    if pool:
-        pool.close()
-        pool.join()
-
-    global _pretok_worker_config, _pretok_demo_lookup
-    _pretok_worker_config = None
-    _pretok_demo_lookup = None
-
-    # End-of-run summary
-    logger.info("Pretokenization Statistics:")
-    logger.info(f"  Total samples processed: {processed_count}")
-    logger.info(f"  Samples with valid data: {written_count}")
-    total_skipped = processed_count - written_count
-    logger.info(f"  Samples skipped (total): {total_skipped}")
-    if none_count:
-        logger.info(f"    - None outputs (other): {none_count}")
-    for k, v in sorted(skip_reasons.items()):
-        logger.info(f"    - {k}: {v}")

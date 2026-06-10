@@ -1,6 +1,6 @@
 import argparse
 
-from ehr_fm.tokenizer import pretokenize_data
+from ehr_fm.pretokenize import pretokenize_data
 
 
 def parse_args():

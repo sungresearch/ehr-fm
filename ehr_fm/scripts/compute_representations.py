@@ -16,7 +16,7 @@ from ehr_fm.embedding.lookup import EmbeddingLookup
 from ehr_fm.logger import setup_logging
 from ehr_fm.models import DualPathInputEncoder
 from ehr_fm.models.transformer import EHRFM
-from ehr_fm.tokenizer import pretokenize_data
+from ehr_fm.pretokenize import pretokenize_data
 
 
 def _load_encoder_weights(model: EHRFM, checkpoint_dir: Path, logger) -> None:
