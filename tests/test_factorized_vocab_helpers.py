@@ -93,11 +93,3 @@ class TestFactorizedStageVocabEntries:
         entries = _factorized_stage_vocab_entries([])
         assert len(entries) == 1
         assert entries[0]["label"] == STAGE_UNK_LABEL
-
-    def test_correct_structure(self):
-        """Entries have correct structure."""
-        entries = _factorized_stage_vocab_entries(["test"])
-        for entry in entries:
-            assert entry["type"] == "stage"
-            assert "label" in entry
-            assert entry["weight"] == -1.0

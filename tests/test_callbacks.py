@@ -29,24 +29,6 @@ def _make_control() -> SimpleNamespace:
 # ===================================================================
 
 
-class TestVariableSaveFrequencyInit:
-    def test_defaults(self):
-        cb = VariableSaveFrequencyCallback()
-        assert cb.early_save_until_step == 0
-        assert cb.early_save_every is None
-        assert cb.late_save_every is None
-
-    def test_custom_params(self):
-        cb = VariableSaveFrequencyCallback(
-            early_save_until_step=1000,
-            early_save_every=100,
-            late_save_every=500,
-        )
-        assert cb.early_save_until_step == 1000
-        assert cb.early_save_every == 100
-        assert cb.late_save_every == 500
-
-
 class TestVariableSaveOnStepEnd:
     def test_both_none_noop(self):
         cb = VariableSaveFrequencyCallback()

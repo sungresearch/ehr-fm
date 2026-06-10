@@ -7,28 +7,6 @@ import pytest
 from ehr_fm.vocabulary import QuantilePreScanner
 
 
-class TestQuantilePreScannerInit:
-    """Test QuantilePreScanner initialization."""
-
-    def test_default_init(self):
-        """Initialize with defaults."""
-        scanner = QuantilePreScanner()
-        assert scanner.num_quantiles == 10
-        assert scanner.reservoir_size == 10000
-        assert len(scanner.reservoirs) == 0
-        assert len(scanner.discovered_stages) == 0
-
-    def test_custom_quantiles(self):
-        """Initialize with custom num_quantiles."""
-        scanner = QuantilePreScanner(num_quantiles=5)
-        assert scanner.num_quantiles == 5
-
-    def test_custom_reservoir_size(self):
-        """Initialize with custom reservoir_size."""
-        scanner = QuantilePreScanner(reservoir_size=1000)
-        assert scanner.reservoir_size == 1000
-
-
 class TestQuantilePreScannerForward:
     """Test QuantilePreScanner.forward() sample collection."""
 

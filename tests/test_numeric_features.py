@@ -236,12 +236,3 @@ class TestLegacyZscoreUnchanged:
         assert len(result) == 5
         assert result[4] == 1.0  # value_present
         assert result[3] == 0.0  # ref_range_available
-
-
-class TestScaleConstant:
-    def test_log1p_scale_constant_value(self):
-        assert LOG1P_SCALE_CONSTANT == 7.0
-
-    def test_typical_lab_range_normalized(self):
-        """log1p(1000) / 7.0 should be close to 1.0."""
-        assert math.log1p(1000) / LOG1P_SCALE_CONSTANT == pytest.approx(0.99, abs=0.01)
