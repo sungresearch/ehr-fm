@@ -29,6 +29,25 @@ def _collate(
     return list(ids), list(data)
 
 
+def compute_log_stats(code_log_values: dict[str, list[float]]) -> dict[str, dict]:
+    """Per-code log-transform statistics: {log_mean, log_std, n_samples}.
+
+    log_std falls back to 1.0 when a code has <=1 sample or a degenerate
+    (<1e-8) spread. Codes with no samples are omitted.
+    """
+    output: dict[str, dict] = {}
+    for code, vals in code_log_values.items():
+        n = len(vals)
+        if n == 0:
+            continue
+        mean = sum(vals) / n
+        std = math.sqrt(sum((v - mean) ** 2 for v in vals) / (n - 1)) if n > 1 else 1.0
+        if std < 1e-8:
+            std = 1.0
+        output[code] = {"log_mean": mean, "log_std": std, "n_samples": n}
+    return output
+
+
 def main():
     parser = argparse.ArgumentParser(description="Compute per-code numeric statistics for embedding mode.")
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to MEDS Reader dataset.")
@@ -69,24 +88,7 @@ def main():
                 if numeric_value is not None:
                     code_log_values[event["code"]].append(math.log1p(abs(numeric_value)))
 
-    output = {}
-    for code, vals in code_log_values.items():
-        n = len(vals)
-        if n == 0:
-            continue
-        mean = sum(vals) / n
-        if n > 1:
-            variance = sum((v - mean) ** 2 for v in vals) / (n - 1)
-            std = math.sqrt(variance)
-        else:
-            std = 1.0
-        if std < 1e-8:
-            std = 1.0
-        output[code] = {
-            "log_mean": mean,
-            "log_std": std,
-            "n_samples": n,
-        }
+    output = compute_log_stats(code_log_values)
 
     out_path = Path(args.output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
