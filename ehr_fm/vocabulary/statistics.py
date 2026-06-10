@@ -18,6 +18,43 @@ from ehr_fm.logger import setup_logging
 from ehr_fm.types import EventSequence
 
 
+def compute_quantile_breaks(samples: list[float], num_quantiles: int) -> list[float]:
+    """Compute deduplicated quantile break points for one code's samples.
+
+    Sorts ``samples`` and splits them into ``num_quantiles`` equal buckets,
+    returning the interior break points (length ``num_quantiles - 1`` before
+    deduplication). Consecutive identical breaks are collapsed so that bucket
+    boundaries are strictly increasing.
+
+    Invariant inputs (all samples identical) return an empty list, which maps
+    every value to the first bucket (Q:1). Callers are expected to skip codes
+    with no samples; this helper assumes ``samples`` is non-empty.
+
+    Returns:
+        Sorted list of break points; ``[]`` for invariant samples.
+    """
+    samples = sorted(samples)
+
+    # Invariant values (all identical) → empty breaks list → all map to Q:1
+    if len(set(samples)) == 1:
+        return []
+
+    code_breaks = []
+    for i in range(1, num_quantiles):
+        idx = int(i * len(samples) / num_quantiles)
+        if idx < len(samples):
+            code_breaks.append(samples[idx])
+
+    # Deduplicate consecutive identical breaks
+    if not code_breaks:
+        return []
+    deduped = [code_breaks[0]]
+    for brk in code_breaks[1:]:
+        if brk != deduped[-1]:
+            deduped.append(brk)
+    return deduped
+
+
 @dataclass(slots=True)
 class OnlineStatistics:
     count: float = 0.0
@@ -191,35 +228,11 @@ class QuantilePreScanner:
             if reservoir.n == 0:
                 continue
 
-            samples = sorted(reservoir.samples[: reservoir.n])
+            samples = reservoir.samples[: reservoir.n]
             if not samples:
                 continue
 
-            # Handle invariant values (all samples identical)
-            unique_values = set(samples)
-            if len(unique_values) == 1:
-                # All values are the same → empty breaks list
-                # All values will map to Q:1
-                breaks[code] = []
-                self.logger.debug(f"Code '{code}' has invariant value: {samples[0]}")
-                continue
-
-            # Compute quantile break points
-            code_breaks = []
-            for i in range(1, self.num_quantiles):
-                idx = int(i * len(samples) / self.num_quantiles)
-                if idx < len(samples):
-                    code_breaks.append(samples[idx])
-
-            # Deduplicate consecutive identical breaks
-            if code_breaks:
-                deduped = [code_breaks[0]]
-                for brk in code_breaks[1:]:
-                    if brk != deduped[-1]:
-                        deduped.append(brk)
-                code_breaks = deduped
-
-            breaks[code] = code_breaks
+            breaks[code] = compute_quantile_breaks(samples, self.num_quantiles)
 
         self.logger.info(f"Computed quantile breaks for {len(breaks)} codes")
         return breaks

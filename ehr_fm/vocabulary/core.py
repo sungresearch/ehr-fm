@@ -17,7 +17,11 @@ from ehr_fm.io import write_dict_to_json
 from ehr_fm.logger import setup_logging
 from ehr_fm.types import ConfigLike, EventSequence, PathLike
 from ehr_fm.validation import PathValidator, VocabConfig, validate_config
-from ehr_fm.vocabulary.statistics import OnlineStatistics, ReservoirSampler
+from ehr_fm.vocabulary.statistics import (
+    OnlineStatistics,
+    ReservoirSampler,
+    compute_quantile_breaks,
+)
 from ehr_fm.vocabulary.token_entries import (
     _factorized_quantile_vocab_entries,
     _factorized_stage_vocab_entries,
@@ -398,33 +402,11 @@ class FactorizedVocab(Vocab):
             if reservoir.n == 0:
                 continue
 
-            samples = sorted(reservoir.samples[: reservoir.n])
+            samples = reservoir.samples[: reservoir.n]
             if not samples:
                 continue
 
-            # Handle invariant values (all samples identical)
-            unique_values = set(samples)
-            if len(unique_values) == 1:
-                # All values are the same → empty breaks list → all map to Q:1
-                breaks[code] = []
-                continue
-
-            # Compute break points for num_quantiles buckets
-            code_breaks = []
-            for i in range(1, self.num_quantiles):
-                idx = int(i * len(samples) / self.num_quantiles)
-                if idx < len(samples):
-                    code_breaks.append(samples[idx])
-
-            # Deduplicate consecutive identical breaks
-            if code_breaks:
-                deduped = [code_breaks[0]]
-                for brk in code_breaks[1:]:
-                    if brk != deduped[-1]:
-                        deduped.append(brk)
-                code_breaks = deduped
-
-            breaks[code] = code_breaks
+            breaks[code] = compute_quantile_breaks(samples, self.num_quantiles)
 
         return breaks
 
