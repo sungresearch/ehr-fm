@@ -1,16 +1,39 @@
 import random
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Self
 
 import meds_reader
 import polars as pl
 import torch
+from pydantic import BaseModel, model_validator
 from torch.utils.data import Dataset
 
 from ehr_fm.logger import setup_logging
 from ehr_fm.types import ConfigLike, PathLike
-from ehr_fm.validation import MEDSReaderDatasetConfig, validate_config
+from ehr_fm.validation import PathValidator, validate_config
+
+
+class MEDSReaderDatasetConfig(BaseModel):
+    meds_reader_path: Path | str
+    samples_path: Path | str | None = None
+    split: Literal["train", "val", "test", "validation", None] = None
+    transform: Callable = None
+
+    @model_validator(mode="after")
+    def validate_config(self) -> Self:
+        if isinstance(self.meds_reader_path, str):
+            self.meds_reader_path = Path(self.meds_reader_path)
+        if isinstance(self.samples_path, str):
+            self.samples_path = Path(self.samples_path)
+
+        PathValidator(path=self.meds_reader_path, ptype="dir")
+
+        if not self.samples_path:
+            self.samples_path = self.meds_reader_path / "metadata" / "samples.parquet"
+        PathValidator(path=self.samples_path, ptype="file", extensions=".parquet")
+        return self
 
 
 def _get_event_attribute(event, attr_name, default=None):

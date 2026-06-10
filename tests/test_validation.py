@@ -5,12 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ehr_fm.validation import (
-    MEDSReaderDatasetConfig,
-    PathValidator,
-    VocabConfig,
-    validate_config,
-)
+from ehr_fm.data import MEDSReaderDatasetConfig
+from ehr_fm.validation import PathValidator, VocabConfig, validate_config
 
 
 class TestPathValidator:

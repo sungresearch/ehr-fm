@@ -1,6 +1,5 @@
 import errno
 import os
-from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Self
 
@@ -58,27 +57,6 @@ def validate_config(config: str | Path | dict | BaseModel, model: type[BaseModel
             "model": model,
         }
     ).config
-
-
-class MEDSReaderDatasetConfig(BaseModel):
-    meds_reader_path: Path | str
-    samples_path: Path | str | None = None
-    split: Literal["train", "val", "test", "validation", None] = None
-    transform: Callable = None
-
-    @model_validator(mode="after")
-    def validate_config(self) -> Self:
-        if isinstance(self.meds_reader_path, str):
-            self.meds_reader_path = Path(self.meds_reader_path)
-        if isinstance(self.samples_path, str):
-            self.samples_path = Path(self.samples_path)
-
-        PathValidator(path=self.meds_reader_path, ptype="dir")
-
-        if not self.samples_path:
-            self.samples_path = self.meds_reader_path / "metadata" / "samples.parquet"
-        PathValidator(path=self.samples_path, ptype="file", extensions=".parquet")
-        return self
 
 
 class VocabConfig(BaseModel):
