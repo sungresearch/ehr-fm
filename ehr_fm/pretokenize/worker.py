@@ -1,13 +1,14 @@
 """Pool worker for pretokenization.
 
-Process-global state (policy, token lookup, config, demographic lookup) is built
+All per-process state is bundled into a single ``_WorkerState`` object, built
 once by ``_pretokenize_init_worker`` -- run as the multiprocessing ``Pool``
 initializer in each child process -- and read by ``_pretokenize_process_row``.
 The initializer and the per-row reader deliberately live in the SAME module so
-they share one module-global namespace per worker process; splitting them apart
-would break that contract.
+they share one module-global (``_worker_state``) per worker process; splitting
+them apart would break that contract.
 """
 
+import dataclasses
 import datetime
 
 import pyarrow as pa
@@ -33,8 +34,26 @@ from ehr_fm.tokenization import (
     FactorizedPolicy,
     JointConfig,
     JointPolicy,
+    TokenizationPolicy,
 )
 from ehr_fm.types import PathLike
+
+
+@dataclasses.dataclass(frozen=True)
+class _WorkerState:
+    """Immutable per-process pretokenize state, built once by the initializer."""
+
+    policy: TokenizationPolicy
+    token_lookup: dict[str, int]
+    config: PretokenizeWorkerConfig
+    demo_lookup: dict[str, int]
+
+
+# Set by _pretokenize_init_worker (pool initializer, or the sequential path in
+# the driver), read by _pretokenize_process_row, reset by the driver. ``None``
+# until initialized -- defining it at module scope keeps the guard below a plain
+# ``is None`` check rather than relying on the name having been created.
+_worker_state: "_WorkerState | None" = None
 
 
 def _pretokenize_init_worker(
@@ -48,8 +67,7 @@ def _pretokenize_init_worker(
     sex_codes_unknown: str | None = None,
     quantile_breaks_override_path: PathLike | None = None,
 ):
-    global _pretok_policy_instance, _pretok_token_lookup
-    global _pretok_worker_config, _pretok_demo_lookup
+    global _worker_state
 
     logger = setup_logging(child_name="pretokenize_worker")
     vocab_data = read_json_yaml(vocab_path)
@@ -58,7 +76,7 @@ def _pretokenize_init_worker(
 
     interval_token_lookup = _build_interval_token_lookup(vocab_entries)
 
-    _pretok_worker_config = PretokenizeWorkerConfig(
+    worker_config = PretokenizeWorkerConfig(
         vocab_size=len(vocab_entries),
         age_mean=age_stats["mean"],
         age_std=age_stats["std"],
@@ -73,12 +91,12 @@ def _pretokenize_init_worker(
         sex_codes_unknown=sex_codes_unknown,
     )
 
-    _pretok_demo_lookup = {}
+    demo_lookup = {}
     for i, v in enumerate(vocab_entries):
         if v.get("type") == "demographic":
             label = v.get("label")
             if label:
-                _pretok_demo_lookup[label] = i
+                demo_lookup[label] = i
 
     vocab_config = vocab_data.get("config", {})
     tokenization_mode = vocab_config.get("tokenization_mode")
@@ -103,7 +121,7 @@ def _pretokenize_init_worker(
 
     known_stages = set(vocab_data.get("discovered_stages", []))
 
-    _pretok_token_lookup = _build_token_string_lookup(vocab_entries)
+    token_lookup = _build_token_string_lookup(vocab_entries)
 
     if tokenization_mode == "factorized":
         factorized_config = FactorizedConfig(
@@ -114,11 +132,11 @@ def _pretokenize_init_worker(
             remove_prefixes=vocab_config.get("remove_prefixes", True),
             separator=vocab_config.get("separator", "/"),
         )
-        _pretok_policy_instance = FactorizedPolicy(
+        policy_instance = FactorizedPolicy(
             config=factorized_config,
             quantile_breaks=quantile_breaks,
             known_stages=known_stages,
-            token_lookup=_pretok_token_lookup,
+            token_lookup=token_lookup,
         )
     else:
         joint_config = JointConfig(
@@ -129,11 +147,11 @@ def _pretokenize_init_worker(
             remove_prefixes=vocab_config.get("remove_prefixes", True),
             separator=vocab_config.get("separator", "/"),
         )
-        _pretok_policy_instance = JointPolicy(
+        policy_instance = JointPolicy(
             config=joint_config,
             quantile_breaks=quantile_breaks,
             known_stages=known_stages,
-            token_lookup=_pretok_token_lookup,
+            token_lookup=token_lookup,
         )
 
     if inject_time_intervals:
@@ -180,12 +198,22 @@ def _pretokenize_init_worker(
         f"demographic_tokens_present={num_demo_present}"
     )
 
+    _worker_state = _WorkerState(
+        policy=policy_instance,
+        token_lookup=token_lookup,
+        config=worker_config,
+        demo_lookup=demo_lookup,
+    )
+
 
 def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
-    global _pretok_policy_instance, _pretok_token_lookup
-    global _pretok_worker_config, _pretok_demo_lookup
-    if row is None or _pretok_worker_config is None:
+    if row is None or _worker_state is None:
         return None
+
+    policy = _worker_state.policy
+    token_lookup = _worker_state.token_lookup
+    config = _worker_state.config
+    demo_lookup = _worker_state.demo_lookup
 
     pid, seq = row
 
@@ -196,15 +224,15 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
             return {"_skip_reason": "empty_sequence"}
         birth_t = seq[0]["time"]
 
-    vocab_size = vocab_size or _pretok_worker_config.vocab_size
+    vocab_size = vocab_size or config.vocab_size
 
     codes, ages, ages_normalized = [], [], []
     prev_time = None
-    inject_intervals = _pretok_worker_config.inject_time_intervals
-    bins = _pretok_worker_config.interval_bins
-    max_repeat = _pretok_worker_config.max_interval_repeat
-    interval_lookup = _pretok_worker_config.interval_token_lookup
-    demographic_prefix = _pretok_worker_config.demographic_prefix
+    inject_intervals = config.inject_time_intervals
+    bins = config.interval_bins
+    max_repeat = config.max_interval_repeat
+    interval_lookup = config.interval_token_lookup
+    demographic_prefix = config.demographic_prefix
 
     if current_max_events is not None and demographic_prefix:
         raise ValueError(
@@ -215,9 +243,9 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
         )
 
     events_to_process = seq if current_max_events is None else seq[-current_max_events:]
-    male_override = _pretok_worker_config.sex_codes_male
-    female_override = _pretok_worker_config.sex_codes_female
-    unknown_override = _pretok_worker_config.sex_codes_unknown
+    male_override = config.sex_codes_male
+    female_override = config.sex_codes_female
+    unknown_override = config.sex_codes_unknown
     sex_codes_male = set(male_override.split(",")) if male_override else set(DEFAULT_SEX_CODES["male"])
     sex_codes_female = (
         set(female_override.split(",")) if female_override else set(DEFAULT_SEX_CODES["female"])
@@ -291,7 +319,7 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
 
         demo_labels = [sex_label, age_label]
 
-        demographic_include_year = _pretok_worker_config.demographic_include_year
+        demographic_include_year = config.demographic_include_year
         if demographic_include_year:
             # Year bucket at first event
             year = first_event["time"].year
@@ -309,7 +337,7 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
             demo_labels.append(year_label)
 
         for lbl in demo_labels:
-            tok = _pretok_demo_lookup.get(lbl)
+            tok = demo_lookup.get(lbl)
             if tok is None or tok >= vocab_size:
                 _logger = setup_logging(child_name="pretokenize_worker")
                 _logger.warning(f"Demographic token {lbl} missing or >= vocab_size; skipping sample.")
@@ -326,10 +354,8 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
         start_idx = 0
 
     for m in events_to_process[start_idx:]:
-        if _pretok_policy_instance is not None and _pretok_token_lookup is not None:
-            event_tokens = _tokenize_event_with_policy(
-                m, _pretok_policy_instance, _pretok_token_lookup, vocab_size
-            )
+        if policy is not None and token_lookup is not None:
+            event_tokens = _tokenize_event_with_policy(m, policy, token_lookup, vocab_size)
 
             if not event_tokens:
                 continue
@@ -337,7 +363,7 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
             event_time = m["time"]
             time_diff = event_time - birth_t
             dt_val = time_diff / datetime.timedelta(days=1)
-            dt_normalized = _pretok_worker_config.normalize_age(time_diff)
+            dt_normalized = config.normalize_age(time_diff)
 
             if inject_intervals and prev_time is not None:
                 dt = (event_time - prev_time).total_seconds()
@@ -359,9 +385,7 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
                                         inserted_age_seconds = event_age_seconds
                                     ages.append(inserted_age_seconds / day)
                                     ages_normalized.append(
-                                        _pretok_worker_config.normalize_age(
-                                            datetime.timedelta(seconds=inserted_age_seconds)
-                                        )
+                                        config.normalize_age(datetime.timedelta(seconds=inserted_age_seconds))
                                     )
                             dt = dt - count * 6 * month
                     bin_tok = _find_bin_token(dt)
@@ -373,7 +397,7 @@ def _pretokenize_process_row(row, *, current_max_events: int, vocab_size: int):
                         else:
                             event_age_seconds = (event_time - birth_t).total_seconds()
                             ages.append(event_age_seconds / day)
-                            ages_normalized.append(_pretok_worker_config.normalize_age(event_time - birth_t))
+                            ages_normalized.append(config.normalize_age(event_time - birth_t))
 
             for tok in event_tokens:
                 codes.append(tok)

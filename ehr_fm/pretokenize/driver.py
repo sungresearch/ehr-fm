@@ -173,8 +173,7 @@ def pretokenize_data(
 
     # Reset the worker module's process-global state (set in-process by the
     # sequential path) so a subsequent call starts clean.
-    worker._pretok_worker_config = None
-    worker._pretok_demo_lookup = None
+    worker._worker_state = None
 
     # End-of-run summary
     logger.info("Pretokenization Statistics:")
