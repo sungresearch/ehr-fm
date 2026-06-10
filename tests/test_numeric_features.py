@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from ehr_fm.scripts.pretokenize_embedding import (
+from ehr_fm.pretokenize.embedding_numeric import (
     LOG1P_SCALE_CONSTANT,
     MIN_REF_RANGE_WIDTH,
     _compute_numeric_features,

@@ -11,7 +11,7 @@ import json
 import numpy as np
 from safetensors.numpy import save_file
 
-import ehr_fm.scripts.pretokenize_embedding as pe
+import ehr_fm.pretokenize.embedding_worker as pe
 
 T0 = datetime.datetime(2000, 1, 1)
 
