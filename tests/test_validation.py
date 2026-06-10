@@ -6,7 +6,8 @@ import pytest
 from pydantic import ValidationError
 
 from ehr_fm.data import MEDSReaderDatasetConfig
-from ehr_fm.validation import PathValidator, VocabConfig, validate_config
+from ehr_fm.validation import PathValidator, validate_config
+from ehr_fm.vocabulary import VocabConfig
 
 
 class TestPathValidator:
@@ -80,16 +81,3 @@ class TestMEDSReaderDatasetConfig:
         cfg = MEDSReaderDatasetConfig(meds_reader_path=str(tmp_path))
         assert isinstance(cfg.meds_reader_path, Path)
         assert cfg.samples_path == tmp_path / "metadata" / "samples.parquet"
-
-
-class TestVocabConfig:
-    def test_defaults(self):
-        cfg = VocabConfig(n_samples=5, vocab_size=10)
-        assert cfg.n_numeric_bins == 10
-        assert cfg.numeric_reservoir_size == 10000
-        assert cfg.numeric_bin_by_unit is False
-        assert cfg.seed is None
-
-    def test_missing_required_raises(self):
-        with pytest.raises(ValidationError):
-            VocabConfig(n_samples=5)  # missing vocab_size

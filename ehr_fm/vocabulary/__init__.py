@@ -1,3 +1,4 @@
+from ehr_fm.vocabulary.config import VocabConfig
 from ehr_fm.vocabulary.core import FactorizedVocab, JointVocab, Vocab
 from ehr_fm.vocabulary.statistics import (
     OnlineStatistics,
@@ -17,6 +18,7 @@ __all__ = [
     "Vocab",
     "FactorizedVocab",
     "JointVocab",
+    "VocabConfig",
     "OnlineStatistics",
     "QuantilePreScanner",
     "ReservoirSampler",

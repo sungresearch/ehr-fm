@@ -16,7 +16,8 @@ from torch.utils.data import DataLoader
 from ehr_fm.io import write_dict_to_json
 from ehr_fm.logger import setup_logging
 from ehr_fm.types import ConfigLike, EventSequence, PathLike
-from ehr_fm.validation import PathValidator, VocabConfig, validate_config
+from ehr_fm.validation import PathValidator, validate_config
+from ehr_fm.vocabulary.config import VocabConfig
 from ehr_fm.vocabulary.statistics import (
     OnlineStatistics,
     ReservoirSampler,
