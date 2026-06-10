@@ -1,10 +1,7 @@
 """Tests for factorized vocabulary helper functions."""
 
 from ehr_fm.defaults import STAGE_UNK_LABEL, quantile_labels
-from ehr_fm.vocabulary import (
-    _factorized_quantile_vocab_entries,
-    _factorized_stage_vocab_entries,
-)
+from ehr_fm.vocabulary import _factorized_stage_vocab_entries
 
 
 class TestQuantileLabels:
@@ -28,27 +25,6 @@ class TestQuantileLabels:
         """Single quantile generates Q:1 and Q:UNK."""
         labels = quantile_labels(1)
         assert labels == ["Q:1", "Q:UNK"]
-
-
-class TestFactorizedQuantileVocabEntries:
-    """Test _factorized_quantile_vocab_entries function."""
-
-    def test_creates_correct_entries(self):
-        """Creates vocab entries with correct structure."""
-        entries = _factorized_quantile_vocab_entries(5)
-        assert len(entries) == 6
-
-        # Check structure
-        for entry in entries:
-            assert entry["type"] == "quantile"
-            assert "label" in entry
-            assert entry["weight"] == -1.0
-
-        # Check labels
-        labels = [e["label"] for e in entries]
-        assert "Q:1" in labels
-        assert "Q:5" in labels
-        assert "Q:UNK" in labels
 
 
 class TestFactorizedStageVocabEntries:

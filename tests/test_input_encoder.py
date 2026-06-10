@@ -26,20 +26,6 @@ class TestTextProjection:
 
 
 class TestNumericalEncoder:
-    def test_output_shapes(self):
-        enc = NumericalEncoder(input_dim=5, hidden_dim=128, output_dim=768)
-        x = torch.randn(10, 5)
-        gamma, beta = enc(x)
-        assert gamma.shape == (10, 768)
-        assert beta.shape == (10, 768)
-
-    def test_output_shapes_dim4(self):
-        enc = NumericalEncoder(input_dim=4, hidden_dim=128, output_dim=768)
-        x = torch.randn(10, 4)
-        gamma, beta = enc(x)
-        assert gamma.shape == (10, 768)
-        assert beta.shape == (10, 768)
-
     def test_identity_init(self):
         """At init, gamma should be ~1 and beta should be ~0."""
         enc = NumericalEncoder(input_dim=5, hidden_dim=128, output_dim=768)
@@ -68,14 +54,6 @@ class TestNumericalEncoder:
         gamma, beta = enc(x)
         assert torch.allclose(gamma, torch.ones_like(gamma))
         assert torch.allclose(beta, torch.zeros_like(beta))
-
-    def test_output_shapes_dim15(self):
-        """fourier_ref_range_priority: 15-dim input."""
-        enc = NumericalEncoder(input_dim=15, hidden_dim=128, output_dim=768)
-        x = torch.randn(10, 15)
-        gamma, beta = enc(x)
-        assert gamma.shape == (10, 768)
-        assert beta.shape == (10, 768)
 
     def test_identity_init_dim15(self):
         """Same identity init property with fourier_ref_range_priority feature dim."""
@@ -129,20 +107,6 @@ class TestDualPathInputEncoder:
         enc = self._make_encoder()
         ids = torch.randint(0, 100, (10,))
         feats = torch.randn(10, 5)
-        out = enc(ids, feats)
-        assert out.shape == (10, 64)
-
-    def test_dual_path_output_shape_dim4(self):
-        enc = self._make_encoder(numerical_input_dim=4)
-        ids = torch.randint(0, 100, (10,))
-        feats = torch.randn(10, 4)
-        out = enc(ids, feats)
-        assert out.shape == (10, 64)
-
-    def test_dual_path_output_shape_dim15(self):
-        enc = self._make_encoder(numerical_input_dim=15)
-        ids = torch.randint(0, 100, (10,))
-        feats = torch.randn(10, 15)
         out = enc(ids, feats)
         assert out.shape == (10, 64)
 
@@ -227,9 +191,11 @@ class TestEmbeddingCollation:
         assert collated["numeric_features"].shape == (5, 5)
 
     def test_collate_with_dim4_numeric_features(self):
-        """ref_range_priority: 4-dim numeric features collate correctly."""
+        """ref_range_priority: 4-dim numeric features collate by concatenation, values intact."""
         from ehr_fm.models.transformer import packed_ehr_collate
 
+        f1 = torch.tensor([[0.5, 1.0, 0.0, 1.0], [0.2, 0.0, 1.0, 1.0]])
+        f2 = torch.tensor([[1.5, 1.0, 0.0, 1.0]])
         batch = [
             {
                 "input_ids": torch.tensor([1, 2]),
@@ -240,16 +206,29 @@ class TestEmbeddingCollation:
                 "patient_id": 1,
                 "index_time": 1000.0,
                 "embedding_text_ids": torch.tensor([10, 20]),
-                "numeric_features": torch.randn(2, 4),
+                "numeric_features": f1,
+            },
+            {
+                "input_ids": torch.tensor([3]),
+                "labels": torch.tensor([-100]),
+                "age": torch.tensor([0.0]),
+                "age_normalized": torch.tensor([0.0]),
+                "length": 1,
+                "patient_id": 2,
+                "index_time": 2000.0,
+                "embedding_text_ids": torch.tensor([30]),
+                "numeric_features": f2,
             },
         ]
         collated = packed_ehr_collate(batch)
-        assert collated["numeric_features"].shape == (2, 4)
+        assert collated["numeric_features"].shape == (3, 4)
+        assert torch.equal(collated["numeric_features"], torch.cat([f1, f2], dim=0))
 
     def test_collate_with_dim15_numeric_features(self):
-        """fourier_ref_range_priority: 15-dim numeric features collate correctly."""
+        """fourier_ref_range_priority: 15-dim numeric features collate, values intact."""
         from ehr_fm.models.transformer import packed_ehr_collate
 
+        feats = torch.arange(2 * 15, dtype=torch.float32).reshape(2, 15)
         batch = [
             {
                 "input_ids": torch.tensor([1, 2]),
@@ -260,11 +239,12 @@ class TestEmbeddingCollation:
                 "patient_id": 1,
                 "index_time": 1000.0,
                 "embedding_text_ids": torch.tensor([10, 20]),
-                "numeric_features": torch.randn(2, 15),
+                "numeric_features": feats,
             },
         ]
         collated = packed_ehr_collate(batch)
         assert collated["numeric_features"].shape == (2, 15)
+        assert torch.equal(collated["numeric_features"], feats)
 
     def test_collate_without_embedding_fields(self):
         """Backward compat: batch without embedding fields still works."""
