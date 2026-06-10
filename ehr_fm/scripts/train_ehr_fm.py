@@ -6,10 +6,10 @@ from pathlib import Path
 
 import torch
 from torch.optim import AdamW
-from transformers import EarlyStoppingCallback, TrainingArguments, get_wsd_schedule
+from transformers import EarlyStoppingCallback, TrainingArguments
 from transformers.trainer_pt_utils import get_parameter_names
 
-from ehr_fm.callbacks import TopKCheckpointCallback, VariableSaveFrequencyCallback
+from ehr_fm.callbacks import VariableSaveFrequencyCallback
 from ehr_fm.cli_utils import normalize_resume_checkpoint, str_to_bool
 from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
 from ehr_fm.embedding.lookup import EmbeddingLookup
@@ -72,37 +72,6 @@ def build_optimizer(config: dict, model: torch.nn.Module, logger) -> torch.optim
 
     else:
         raise ValueError(f"Unsupported optimizer name: {optimizer_name}. Choose 'adamw' or 'stableadamw'.")
-
-
-def build_lr_scheduler(config: dict, optimizer: torch.optim.Optimizer, logger):
-    """Build an LR scheduler from *config* (key ``name`` selects the schedule type)."""
-    scheduler_name = config.get("name")
-
-    if scheduler_name == "wsd":
-        logger.info("Using 'wsd' (Warmup-Stable-Decay) scheduler.")
-        required_keys = ["num_warmup_steps", "num_decay_steps", "num_training_steps", "decay_type"]
-
-        # Check for required parameters
-        missing_keys = [key for key in required_keys if config.get(key) is None]
-        if missing_keys:
-            raise ValueError(f"For 'wsd' scheduler, you must provide: {', '.join(missing_keys)}")
-
-        return get_wsd_schedule(
-            optimizer,
-            num_warmup_steps=config["num_warmup_steps"],
-            num_decay_steps=config["num_decay_steps"],
-            num_training_steps=config["num_training_steps"],
-            decay_type=config["decay_type"],
-        )
-    elif scheduler_name is None:
-        logger.info(
-            "No custom scheduler specified. Trainer will use default scheduler from TrainingArguments."
-        )
-        return None
-    else:
-        raise ValueError(
-            f"Unsupported scheduler name: {scheduler_name}. Choose 'wsd' or leave empty for default."
-        )
 
 
 def prepare_data(
@@ -309,34 +278,6 @@ def train_model(args, model, train_dataset, train_sampler, val_dataset, val_samp
                 "'cosine_with_min_lr' requires min_lr or min_lr_rate and may fail without it."
             )
 
-    # Set up HuggingFace's built-in metric tracking for top-K checkpointing
-    if args.save_top_k > 0:
-        training_args_dict["metric_for_best_model"] = args.metric_for_best_model
-        training_args_dict["greater_is_better"] = args.greater_is_better
-        training_args_dict["load_best_model_at_end"] = args.load_best_model_at_end
-
-        # Warn if load_best_model_at_end is disabled when using top-K checkpointing
-        if not args.load_best_model_at_end:
-            logger.warning(
-                "Top-K checkpointing works best with load_best_model_at_end=True for HF metric tracking"
-            )
-
-        # Ensure evaluation is enabled for top-K checkpointing to work effectively
-        if training_args_dict.get("evaluation_strategy") == "no":
-            logger.warning("Top-K checkpointing enabled but evaluation_strategy is 'no'. Setting to 'steps'.")
-            training_args_dict["evaluation_strategy"] = "steps"
-
-        # Ensure eval_steps is reasonable for responsive top-K checkpointing
-        if (
-            training_args_dict.get("evaluation_strategy") == "steps"
-            and training_args_dict.get("eval_steps", 0) > 1000
-        ):
-            logger.warning(
-                f"eval_steps={training_args_dict.get('eval_steps')} is quite large for "
-                "top-K checkpointing. Consider using smaller values (e.g., 100-500) for "
-                "more responsive checkpointing."
-            )
-
     # Set up HuggingFace's built-in metric tracking for early stopping
     if args.early_stopping_patience > 0:
         training_args_dict["metric_for_best_model"] = args.metric_for_best_model
@@ -378,19 +319,6 @@ def train_model(args, model, train_dataset, train_sampler, val_dataset, val_samp
     }
     logger.info(f"Building optimizer ({args.optimizer_name}) with config: {optimizer_config}")
     optimizer = build_optimizer(config=optimizer_config, model=model, logger=logger)
-
-    # Build the LR scheduler
-    lr_scheduler = None
-    if args.lr_scheduler_name:
-        scheduler_config = {
-            "name": args.lr_scheduler_name,
-            "num_warmup_steps": args.warmup_steps,
-            "num_training_steps": args.max_steps,
-            "num_decay_steps": args.wsd_num_decay_steps,
-            "decay_type": args.wsd_decay_type,
-        }
-        logger.info(f"Building LR scheduler ({args.lr_scheduler_name}) with config: {scheduler_config}")
-        lr_scheduler = build_lr_scheduler(config=scheduler_config, optimizer=optimizer, logger=logger)
 
     # Normalise mixed bool / string values from YAML configs and CLI.
     resume_checkpoint = normalize_resume_checkpoint(args.resume_from_checkpoint)
@@ -451,26 +379,8 @@ def train_model(args, model, train_dataset, train_sampler, val_dataset, val_samp
         val_batch_sampler=val_sampler,
         max_eval_batches=args.max_eval_batches,
         collate_fn=packed_ehr_collate,
-        optimizers=(optimizer, lr_scheduler),  # Pass the custom optimizer
+        optimizers=(optimizer, None),  # Custom optimizer; HF builds the default LR scheduler
     )
-
-    # Add top-K checkpointing callback if enabled
-    if args.save_top_k > 0:
-        logger.info(
-            f"Adding TopKCheckpointCallback: save_top_k={args.save_top_k}, "
-            f"metric={args.metric_for_best_model}"
-        )
-        top_k_callback = TopKCheckpointCallback(
-            save_top_k=args.save_top_k,
-            metric_name=args.metric_for_best_model,
-            greater_is_better=args.greater_is_better,
-            delete_checkpoint_callback=not args.save_best_checkpoint_only,
-            skip_first_n_steps=args.skip_first_n_steps,
-        )
-        top_k_callback.setup_trainer(trainer)
-        trainer.add_callback(top_k_callback)
-    else:
-        top_k_callback = None
 
     # Add early stopping callback if enabled
     if args.early_stopping_patience > 0:
@@ -518,14 +428,6 @@ def train_model(args, model, train_dataset, train_sampler, val_dataset, val_samp
     logger.info("Starting training...")
     train_output = trainer.train(resume_from_checkpoint=resume_checkpoint)
     logger.info(f"Training finished. Output: {train_output}")
-
-    # Log best checkpoint info if using top-K
-    if top_k_callback:
-        best_checkpoint = top_k_callback.get_best_checkpoint_path()
-        best_metric = top_k_callback.get_best_metric_value()
-        if best_checkpoint and best_metric is not None:
-            logger.info(f"Best checkpoint: {best_checkpoint}")
-            logger.info(f"Best {args.metric_for_best_model}: {best_metric:.6f}")
 
     # Log early stopping info if training was stopped early
     if early_stopping_callback and hasattr(trainer.state, "log_history") and trainer.state.log_history:
@@ -885,52 +787,15 @@ def main():
         ),
     )
 
-    # Custom LR Scheduler Arguments
-    lr_scheduler_args = parser.add_argument_group("Custom Learning Rate Scheduler Arguments")
-    lr_scheduler_args.add_argument(
-        "--lr_scheduler_name",
-        type=str,
-        default=None,
-        choices=["wsd"],
-        help=(
-            "Name of the custom learning rate scheduler to use. 'wsd' for Warmup-Stable-Decay. "
-            "If not provided, uses HuggingFace's default scheduler as specified by --lr_scheduler_type. "
-            "If 'wsd' is used, --lr_scheduler_type is ignored."
-        ),
-    )
-    lr_scheduler_args.add_argument(
-        "--wsd_num_decay_steps",
-        type=int,
-        default=None,
-        help="Number of decay steps for WSD scheduler. Required if --lr_scheduler_name is 'wsd'.",
-    )
-    lr_scheduler_args.add_argument(
-        "--wsd_decay_type",
-        type=str,
-        default="cosine",
-        choices=["cosine", "linear"],
-        help="Decay type for WSD scheduler.",
-    )
-
-    # Top-K Checkpointing Arguments
-    checkpoint_args = parser.add_argument_group("Top-K Checkpointing Arguments")
-    checkpoint_args.add_argument(
-        "--save_top_k",
-        type=int,
-        default=0,
-        help=(
-            "Number of best checkpoints to keep based on validation metric. "
-            "If <= 0, disables top-K checkpointing and uses standard HF checkpointing. "
-            "Defaults to 0 (disabled)."
-        ),
-    )
+    # Best-Model Selection Arguments (used by load_best_model_at_end and early stopping)
+    checkpoint_args = parser.add_argument_group("Best-Model Selection Arguments")
     checkpoint_args.add_argument(
         "--metric_for_best_model",
         type=str,
         default="eval_loss",
         help=(
-            "The metric to use for determining the best model for top-K checkpointing. "
-            "Defaults to 'eval_loss'."
+            "The metric used to determine the best model (for load_best_model_at_end and "
+            "early stopping). Defaults to 'eval_loss'."
         ),
     )
     checkpoint_args.add_argument(
@@ -941,26 +806,6 @@ def main():
             "Whether higher values of the metric indicate better models. "
             "Set to False for loss-based metrics, True for accuracy-based metrics. "
             "Defaults to False."
-        ),
-    )
-    checkpoint_args.add_argument(
-        "--save_best_checkpoint_only",
-        type=str_to_bool,
-        default=False,
-        help=(
-            "If True, only saves checkpoints that improve the best metric. "
-            "If False, saves all checkpoints but only keeps top K. "
-            "Defaults to False."
-        ),
-    )
-    checkpoint_args.add_argument(
-        "--skip_first_n_steps",
-        type=int,
-        default=1000,
-        help=(
-            "Skip top-K checkpointing for the first N steps to avoid saving too many "
-            "early checkpoints during the noisy initial training phase. "
-            "Defaults to 1000 steps."
         ),
     )
 
