@@ -1,16 +1,39 @@
 import random
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Self
 
 import meds_reader
 import polars as pl
 import torch
+from pydantic import BaseModel, model_validator
 from torch.utils.data import Dataset
 
 from ehr_fm.logger import setup_logging
 from ehr_fm.types import ConfigLike, PathLike
-from ehr_fm.validation import MEDSReaderDatasetConfig, validate_config
+from ehr_fm.validation import PathValidator, validate_config
+
+
+class MEDSReaderDatasetConfig(BaseModel):
+    meds_reader_path: Path | str
+    samples_path: Path | str | None = None
+    split: Literal["train", "val", "test", "validation", None] = None
+    transform: Callable = None
+
+    @model_validator(mode="after")
+    def validate_config(self) -> Self:
+        if isinstance(self.meds_reader_path, str):
+            self.meds_reader_path = Path(self.meds_reader_path)
+        if isinstance(self.samples_path, str):
+            self.samples_path = Path(self.samples_path)
+
+        PathValidator(path=self.meds_reader_path, ptype="dir")
+
+        if not self.samples_path:
+            self.samples_path = self.meds_reader_path / "metadata" / "samples.parquet"
+        PathValidator(path=self.samples_path, ptype="file", extensions=".parquet")
+        return self
 
 
 def _get_event_attribute(event, attr_name, default=None):
@@ -27,8 +50,9 @@ def _event_to_dict(event) -> dict:
         "text_value": _get_event_attribute(event, "text_value"),
         "unit": _get_event_attribute(event, "unit"),
         "time": event.time,
+        "embedding_text": _get_event_attribute(event, "embedding_text"),
     }
-    for optional in ("visit_id", "workflow_stage"):
+    for optional in ("visit_id", "workflow_stage", "ref_low", "ref_high"):
         val = _get_event_attribute(event, optional)
         if val is not None:
             d[optional] = val
@@ -239,7 +263,7 @@ class TokenizedDataset(Dataset):
     def _get_row(self, row_idx):
         tbl = self.table[row_idx]
 
-        return (
+        result = (
             tbl["subject_id"][0],
             tbl["index_time"][0],
             tbl["token_ids"][0].to_list(),
@@ -247,15 +271,32 @@ class TokenizedDataset(Dataset):
             tbl["age_normalized"][0].to_list(),
         )
 
+        extra = {}
+        if "embedding_text_ids" in tbl.columns:
+            extra["embedding_text_ids"] = tbl["embedding_text_ids"][0].to_list()
+        if "numeric_features" in tbl.columns:
+            extra["numeric_features"] = tbl["numeric_features"][0].to_list()
+
+        return result + (extra,)
+
     # One window
     def __getitem__(self, i):
         row_idx, start = self.window_index[i]
-        pid, idx_t, toks, ages, ages_norm = self._get_row(row_idx)
+        row_data = self._get_row(row_idx)
+        pid, idx_t, toks, ages, ages_norm = row_data[:5]
+        extra = row_data[5]
         end = min(start + self.max_length, len(toks))
 
         slice_tok = toks[start:end]
         slice_age = ages[start:end]
         slice_ages_norm = ages_norm[start:end]
+
+        slice_emb_ids = (
+            extra.get("embedding_text_ids", [None])[start:end] if "embedding_text_ids" in extra else None
+        )
+        slice_num_feat = (
+            extra.get("numeric_features", [None])[start:end] if "numeric_features" in extra else None
+        )
 
         # Apply dropout to the slice if needed
         if self.dropout_prob > 0.0 and len(slice_tok) > 0:
@@ -265,15 +306,20 @@ class TokenizedDataset(Dataset):
             slice_tok = [tok for tok, keep in zip(slice_tok, mask) if keep]
             slice_age = [age for age, keep in zip(slice_age, mask) if keep]
             slice_ages_norm = [age_norm for age_norm, keep in zip(slice_ages_norm, mask) if keep]
+            if slice_emb_ids is not None:
+                slice_emb_ids = [v for v, keep in zip(slice_emb_ids, mask) if keep]
+            if slice_num_feat is not None:
+                slice_num_feat = [v for v, keep in zip(slice_num_feat, mask) if keep]
 
             # Handle the edge case where dropout removes all tokens
             if not slice_tok:
-                # Return the original slice before dropout (this is less ideal than returning None and
-                # letting the caller handle it, but for now it's easier to implement, and better than
-                # potentially crashing)
                 slice_tok = toks[start:end]
                 slice_age = ages[start:end]
                 slice_ages_norm = ages_norm[start:end]
+                if "embedding_text_ids" in extra:
+                    slice_emb_ids = extra["embedding_text_ids"][start:end]
+                if "numeric_features" in extra:
+                    slice_num_feat = extra["numeric_features"][start:end]
 
         # Convert potentially modified slices to tensors
         x = torch.as_tensor(slice_tok, dtype=torch.long)
@@ -290,7 +336,7 @@ class TokenizedDataset(Dataset):
             slice_age = [float(i) for i in range(len(slice_tok))]
             slice_ages_norm = [0.0] * len(slice_tok)
 
-        return {
+        result = {
             "input_ids": x,
             "labels": y,
             "patient_id": pid,
@@ -300,6 +346,13 @@ class TokenizedDataset(Dataset):
             "age": torch.as_tensor(slice_age, dtype=torch.float32),
             "age_normalized": torch.as_tensor(slice_ages_norm, dtype=torch.float32),
         }
+
+        if slice_emb_ids is not None:
+            result["embedding_text_ids"] = torch.as_tensor(slice_emb_ids, dtype=torch.long)
+        if slice_num_feat is not None:
+            result["numeric_features"] = torch.as_tensor(slice_num_feat, dtype=torch.float32)
+
+        return result
 
 
 def create_dataset(config: ConfigLike) -> MEDSReaderDataset:

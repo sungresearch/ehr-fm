@@ -7,51 +7,6 @@ import pytest
 from ehr_fm.vocabulary import JointVocab
 
 
-class TestJointVocabInit:
-    """Test JointVocab initialization."""
-
-    @pytest.fixture
-    def base_config(self):
-        """Minimal vocab config."""
-        return {"vocab_size": 100, "n_samples": 10}
-
-    @pytest.fixture
-    def sample_breaks(self):
-        """Sample quantile breaks."""
-        return {"LAB/glucose": [70.0, 100.0, 130.0]}
-
-    def test_init_with_breaks(self, base_config, sample_breaks):
-        """Initialize with quantile breaks."""
-        vocab = JointVocab(
-            config=base_config,
-            quantile_breaks=sample_breaks,
-        )
-        assert vocab.quantile_breaks == sample_breaks
-        assert vocab.vocab_size == 100
-
-    def test_init_with_discovered_stages(self, base_config, sample_breaks):
-        """Initialize with discovered stages."""
-        vocab = JointVocab(
-            config=base_config,
-            quantile_breaks=sample_breaks,
-            discovered_stages=["taken", "order"],
-        )
-        assert vocab.discovered_stages == {"taken", "order"}
-
-    def test_init_with_emit_flags(self, base_config, sample_breaks):
-        """Initialize with custom emit flags."""
-        vocab = JointVocab(
-            config=base_config,
-            quantile_breaks=sample_breaks,
-            emit_quantiles=False,
-            emit_text=False,
-            emit_stage=True,
-        )
-        assert vocab.emit_quantiles is False
-        assert vocab.emit_text is False
-        assert vocab.emit_stage is True
-
-
 class TestJointVocabForward:
     """Test JointVocab.forward() batch processing."""
 

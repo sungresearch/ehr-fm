@@ -17,7 +17,7 @@ import polars as pl
 import pytest
 
 from ehr_fm.io import read_json_yaml, write_dict_to_json
-from ehr_fm.tokenizer import pretokenize_data
+from ehr_fm.pretokenize import pretokenize_data
 from ehr_fm.vocabulary import Vocab
 
 

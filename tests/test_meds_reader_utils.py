@@ -1,4 +1,6 @@
+import subprocess
 from datetime import datetime
+from unittest.mock import patch
 
 import polars as pl
 import pytest
@@ -41,6 +43,20 @@ def _create_meds_dir(base_dir):
 class TestCheckMedsReaderCommands:
     def test_commands_available(self):
         assert check_meds_reader_commands() is True
+
+    def test_returns_false_when_command_missing(self):
+        """A binary not on PATH (FileNotFoundError) is reported as unavailable."""
+        with patch(
+            "ehr_fm.meds_reader_utils.subprocess.run",
+            side_effect=FileNotFoundError("meds_reader_convert"),
+        ):
+            assert check_meds_reader_commands() is False
+
+    def test_returns_false_on_nonzero_exit(self):
+        """A command that exists but exits non-zero is also treated as unavailable."""
+        err = subprocess.CalledProcessError(returncode=1, cmd="meds_reader_convert")
+        with patch("ehr_fm.meds_reader_utils.subprocess.run", side_effect=err):
+            assert check_meds_reader_commands() is False
 
 
 class TestConvertToMedsReader:

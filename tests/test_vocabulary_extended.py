@@ -1,14 +1,16 @@
-"""Tests for vocabulary.py helpers: OnlineStatistics, ReservoirSampler, prepend_* functions."""
+"""Tests for vocabulary helpers: OnlineStatistics, ReservoirSampler, prepend_* functions, VocabConfig."""
 
 import math
 import statistics
 
 import pytest
+from pydantic import ValidationError
 
 from ehr_fm.defaults import DEFAULT_DEMOGRAPHIC_LABELS, DEFAULT_INTERVAL_LABELS
 from ehr_fm.vocabulary import (
     OnlineStatistics,
     ReservoirSampler,
+    VocabConfig,
     prepend_demographic_tokens,
     prepend_interval_tokens,
 )
@@ -184,3 +186,21 @@ class TestPrependDemographicTokens:
         assert "DEMO_SEX_FEMALE" in labels
         assert "DEMO_AGE_0_4" in labels
         assert any(lbl.startswith("DEMO_YEAR_") for lbl in labels)
+
+
+# ===================================================================
+# VocabConfig
+# ===================================================================
+
+
+class TestVocabConfig:
+    def test_defaults(self):
+        cfg = VocabConfig(n_samples=5, vocab_size=10)
+        assert cfg.n_numeric_bins == 10
+        assert cfg.numeric_reservoir_size == 10000
+        assert cfg.numeric_bin_by_unit is False
+        assert cfg.seed is None
+
+    def test_missing_required_raises(self):
+        with pytest.raises(ValidationError):
+            VocabConfig(n_samples=5)  # missing vocab_size

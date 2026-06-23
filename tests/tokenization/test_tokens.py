@@ -1,12 +1,6 @@
 """Tests for token string builders."""
 
-from ehr_fm.tokenization.tokens import (
-    quantile_token,
-    quantile_unk_token,
-    stage_token,
-    stage_unk_token,
-    text_token,
-)
+from ehr_fm.tokenization.tokens import quantile_token, stage_token, text_token
 
 
 class TestQuantileTokens:
@@ -17,10 +11,6 @@ class TestQuantileTokens:
         assert quantile_token(1) == "Q:1"
         assert quantile_token(5) == "Q:5"
         assert quantile_token(10) == "Q:10"
-
-    def test_quantile_unk_format(self):
-        """Q:UNK format correct."""
-        assert quantile_unk_token() == "Q:UNK"
 
 
 class TestStageTokens:
@@ -37,10 +27,6 @@ class TestStageTokens:
         assert stage_token("ORDER") == "STAGE:order"
         assert stage_token("Taken") == "STAGE:taken"
         assert stage_token("ADMIN") == "STAGE:admin"
-
-    def test_stage_unk_format(self):
-        """STAGE:UNK format correct."""
-        assert stage_unk_token() == "STAGE:UNK"
 
 
 class TestTextTokens:

@@ -8,11 +8,19 @@ All scripts are exposed as CLI commands via the `pyproject.toml` configuration.
 
 ## Available Commands
 
-- [`train_vocabulary`](#train_vocabulary) - Train vocabulary from a MEDS Reader dataset
-- [`pretokenize`](#pretokenize) - Pretokenize a MEDS Reader dataset using a trained vocabulary
-- [`train_ehr_fm`](#train_ehr_fm) - Train an EHR-FM model
-- [`compute_representations`](#compute_representations) - Compute patient representations using a trained EHR-FM model
-- [`apply_meds_transforms`](#apply_meds_transforms) - Apply transformations to a standard MEDS dataset
+The seven commands group by pipeline stage. The **mode** column indicates whether a command is shared, or specific to the discrete (fixed-vocabulary) or embedding (language-grounded / PORTER) input path (see the [main README](../../README.md#pipeline-overview) for how the two paths fit together).
+
+| Command                                               | Stage           | Mode      | Role                                                   |
+| ----------------------------------------------------- | --------------- | --------- | ------------------------------------------------------ |
+| [`apply_meds_transforms`](#apply_meds_transforms)     | Preprocess      | shared    | Fix timestamp leakage in standard MEDS data            |
+| [`train_vocabulary`](#train_vocabulary)               | Vocabulary      | shared    | Build `vocab.json` (joint or factorized)               |
+| [`pretokenize`](#pretokenize)                         | Tokenize        | discrete  | Events → integer token sequences                       |
+| [`build_embedding_lookup`](#build_embedding_lookup)   | Embedding setup | embedding | Encode `embedding_text` → frozen lookup table          |
+| [`pretokenize_embedding`](#pretokenize_embedding)     | Tokenize        | embedding | Events → embedding ids + labels + numeric features     |
+| [`train_ehr_fm`](#train_ehr_fm)                       | Train           | both      | Train the model (`--input_mode discrete \| embedding`) |
+| [`compute_representations`](#compute_representations) | Representations | both      | Extract patient embeddings from a trained model        |
+
+> The flag lists below are curated. For the authoritative, always-current set of options on any command, run `<command> --help`.
 
 ______________________________________________________________________
 
@@ -193,6 +201,104 @@ pretokenize \
 
 ______________________________________________________________________
 
+## `build_embedding_lookup`
+
+**(Embedding mode.)** Encode every unique `embedding_text` string in a MEDS dataset with a frozen text-embedding model into a reusable lookup table. Run once per dataset; the result is shared by `pretokenize_embedding`, `train_ehr_fm`, and `compute_representations`.
+
+### Input
+
+Standard **MEDS** dataset root (`--meds_dir`) whose `data/*.parquet` files contain an `embedding_text` column.
+
+### Output
+
+- `{output_dir}/embedding_table.safetensors` -- frozen embedding matrix
+- `{output_dir}/id_mapping.json` -- `embedding_text` string → integer id
+- `{output_dir}/metadata.json` -- model name and table metadata
+
+### Required Arguments
+
+- `--meds_dir` - Path to the MEDS dataset root
+- `--output_dir` - Output directory for embedding artifacts
+
+### Common Options
+
+- `--model_name` - HuggingFace text-embedding model (default: `Qwen/Qwen3-Embedding-8B`). The PORTER manuscript uses **BioLORD-2023** (`FremyCompany/BioLORD-2023`) as its primary encoder; pass `--model_name` to select it or another encoder.
+- `--batch_size` - Batch size for GPU inference (default: 64)
+- `--device` - Inference device (default: `cuda`)
+- `--dtype` - Storage precision: `float16` (default) or `float32`
+
+### Example Usage
+
+```bash
+build_embedding_lookup \
+  --meds_dir /path/to/meds_dataset \
+  --output_dir /path/to/embedding_lookup
+```
+
+> **GPU memory:** the default model is bfloat16-based; large lookups (>1M unique strings) need an H100-class GPU. See the project-root `CLAUDE.md` for sizing guidance.
+
+______________________________________________________________________
+
+## `pretokenize_embedding`
+
+**(Embedding mode.)** The embedding-path counterpart to `pretokenize`. Produces **event-level** rows (one per event) instead of token sequences: each event maps to an embedding-text id, a next-token-prediction label, and a numeric feature vector. Joint-mode labels only; no interval/demographic injection.
+
+### Input
+
+- **MEDS Reader** directory (`--dataset_path`) with an `embedding_text` field on events
+- `vocab.json` from `train_vocabulary` (`--vocab_path`) -- for the NTP labels
+- Embedding lookup directory from `build_embedding_lookup` (`--embedding_lookup_path`)
+
+### Output
+
+`{out_dir}/patients_tokenized.parquet`:
+
+| Column               | Type                  | Description                                |
+| -------------------- | --------------------- | ------------------------------------------ |
+| `subject_id`         | int64                 | Patient identifier                         |
+| `index_time`         | timestamp\[ns\]       | Index time                                 |
+| `embedding_text_ids` | list\<int32>          | Embedding-table id per event               |
+| `token_ids`          | list\<int32>          | NTP label per event (`-100` = OOV)         |
+| `numeric_features`   | list\<list\<float32>> | Per-event 4-dim feature vector (see below) |
+| `age`                | list\<float32>        | Age in days at each event                  |
+| `age_normalized`     | list\<float32>        | Z-scored age                               |
+| `length`             | int32                 | Number of events                           |
+
+### Required Arguments
+
+- `--dataset_path` - Path to the MEDS Reader dataset
+- `--vocab_path` - Path to `vocab.json`
+- `--embedding_lookup_path` - Path to the embedding lookup directory
+- `--out_dir` - Output directory
+
+### Numeric Pathway Options
+
+- `--numeric_pathway_mode` - Feature construction (only `ref_range_priority` is supported):
+  - `ref_range_priority` (default) -- 4-dim `[x_primary, is_refrange, is_log1p, value_present]`; institution-invariant, no external stats required. This is the numeric feature vector consumed by PORTER's FiLM numeric pathway.
+
+### Common Options
+
+- `--split` - Data split to use
+- `--samples_path` - Path to samples.parquet
+- `--workers` - Worker processes (-1 = all cores, default; 0/1 = sequential)
+- `--vocab_size` - Max vocab size for NTP labels
+- `--row_group_size` - Rows per Parquet row group (default: 32,768)
+
+### Example Usage
+
+```bash
+# ref_range_priority pathway (no external stats needed)
+pretokenize_embedding \
+  --dataset_path /path/to/meds_reader_data \
+  --vocab_path /path/to/vocab.json \
+  --embedding_lookup_path /path/to/embedding_lookup \
+  --out_dir /path/to/tokenized_embedding \
+  --split train \
+  --numeric_pathway_mode ref_range_priority
+```
+
+______________________________________________________________________
+
 ## `train_ehr_fm`
 
 Train an EHR-FM model using pretokenized data.
@@ -233,11 +339,11 @@ Boolean flags (`--fp16`, `--bf16`, `--load_best_model_at_end`, `--greater_is_bet
 
 This flag controls checkpoint resumption and accepts three kinds of values:
 
-| Value | Meaning |
-|---|---|
-| `null` (YAML) / omitted | Start training from scratch. |
+| Value                                                | Meaning                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `null` (YAML) / omitted                              | Start training from scratch.                                                                                                                                                                                                                                   |
 | `true` (YAML) or `True` / `true` / `yes` / `1` (CLI) | **Auto-detect**: resume from the latest checkpoint found in `output_dir`. Regular checkpoints (`checkpoint-{step}`) are preferred; top-K checkpoints (`checkpoint-topk-{step}`) are used as a fallback. If no checkpoints exist, training starts from scratch. |
-| A path string (e.g. `/path/to/checkpoint-5000`) | Resume from that specific checkpoint directory. |
+| A path string (e.g. `/path/to/checkpoint-5000`)      | Resume from that specific checkpoint directory.                                                                                                                                                                                                                |
 
 ### Required Arguments
 
@@ -274,6 +380,12 @@ All options below can be set in the config file or overridden via CLI flags.
 
 - `--num_ntp_classes` - Number of next-token prediction classes (default: 8,192)
 - `--convert_ages_to_positions` - Convert ages to sequential positions at runtime
+
+#### Input Mode
+
+- `--input_mode` - `discrete` (default) trains on `pretokenize` output; `embedding` trains on `pretokenize_embedding` output using a frozen text-embedding encoder.
+- `--embedding_lookup_path` - Path to the embedding lookup directory (required when `--input_mode embedding`).
+- `--use_numerical_path` / `--no-use_numerical_path` - Enable or disable the FiLM numeric pathway (embedding mode only). With it, the event representation combines the text (description) pathway and the numeric pathway; without it, text-only.
 
 #### Training Settings
 
@@ -357,14 +469,9 @@ adam_beta2: 0.999
 adam_epsilon: 1e-8
 max_grad_norm: 1.0
 
-# --- LR schedule (HuggingFace built-in) ---
+# --- LR schedule ---
 lr_scheduler_type: linear     # linear | cosine | constant | constant_with_warmup | cosine_with_min_lr
 warmup_steps: 0
-
-# --- LR schedule (custom, overrides lr_scheduler_type) ---
-# lr_scheduler_name: wsd      # wsd (Warmup-Stable-Decay)
-# wsd_num_decay_steps: null
-# wsd_decay_type: cosine      # cosine | linear
 
 # --- Training ---
 max_steps: 1000000
@@ -454,6 +561,8 @@ Parquet file at `--output_path` with the following schema:
 ### Common Options
 
 - `--vocab_path` - Path to vocabulary file (required when using `--dataset_path`)
+- `--input_mode` - `discrete` (default) or `embedding`; must match the mode the model was trained with
+- `--embedding_lookup_path` - Path to the embedding lookup directory (required when `--input_mode embedding`)
 - `--split` - Data split to process (train, validation, test)
 - `--samples_path` - Path to samples.parquet file
 - `--num_workers` - Number of workers for pretokenization (-1=all cores)

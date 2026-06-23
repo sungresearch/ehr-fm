@@ -5,37 +5,6 @@ import pytest
 from ehr_fm.tokenization.joint import JointConfig, JointTokenBuilder
 
 
-class TestJointConfig:
-    """Test JointConfig dataclass defaults and values."""
-
-    def test_default_values(self):
-        """Verify default configuration values."""
-        config = JointConfig()
-        assert config.emit_quantiles is True
-        assert config.emit_text is True
-        assert config.emit_stage is True
-        assert config.num_quantiles == 10
-        assert config.remove_prefixes is True
-        assert config.separator == "/"
-
-    def test_custom_values(self):
-        """Config accepts custom values."""
-        config = JointConfig(
-            emit_quantiles=False,
-            emit_text=False,
-            emit_stage=False,
-            num_quantiles=5,
-            remove_prefixes=False,
-            separator="-",
-        )
-        assert config.emit_quantiles is False
-        assert config.emit_text is False
-        assert config.emit_stage is False
-        assert config.num_quantiles == 5
-        assert config.remove_prefixes is False
-        assert config.separator == "-"
-
-
 class TestJointTokenBuilderBasicTokens:
     """Test basic token building without attributes."""
 

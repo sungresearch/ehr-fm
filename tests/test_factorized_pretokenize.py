@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 
 from ehr_fm.io import write_dict_to_json
-from ehr_fm.tokenizer import pretokenize_data
+from ehr_fm.pretokenize import pretokenize_data
 
 
 class TestFactorizedPretokenize:
@@ -331,12 +331,11 @@ class TestFactorizedPretokenize:
         df = pl.read_parquet(out_dir / "patients_tokenized.parquet")
         assert len(df) == 2
 
-        # Legacy mode uses direct code lookup
+        # Legacy direct-code-lookup path. For this fixture's sample window the only
+        # emitted token is MEDS_BIRTH (vocab id 0); assert exactly that (no spurious tokens).
         patient1 = df.filter(pl.col("subject_id") == 1)
         tokens = patient1["token_ids"][0].to_list()
-        assert 0 in tokens  # MEDS_BIRTH
-        # Verify token length is reasonable (at least MEDS_BIRTH + some other tokens)
-        assert len(tokens) >= 1
+        assert tokens == [0]
 
 
 class TestFactorizedModeWithStages:

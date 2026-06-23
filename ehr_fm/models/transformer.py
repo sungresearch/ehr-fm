@@ -27,47 +27,6 @@ from .utils import RMSNorm, memory_efficient_attention_wrapper
 
 
 # -----------------------------------------------------------------------------
-# EHRFM Collate function
-# -----------------------------------------------------------------------------
-def packed_ehr_collate(batch):
-    """
-    Combine variable-length windows into the flattened EHRFM layout.
-
-    Output:
-        { input_ids, ages, normalized_ages, patient_lengths, label_indices, patient_ids, index_times, task: {labels} }
-    """
-    lens = [ex["length"] for ex in batch]
-    ages = torch.cat([ex["age"] for ex in batch])
-    anorm = torch.cat([ex["age_normalized"] for ex in batch])
-    lbls = torch.cat([ex["labels"] for ex in batch])
-    pids = [ex["patient_id"] for ex in batch]
-    idx_t = [ex["index_time"] for ex in batch]
-
-    device = ages.device
-    patient_lengths = torch.tensor(lens, dtype=torch.int32, device=device)
-    label_indices = torch.nonzero(lbls != -100, as_tuple=False)[:, 0].long()
-    patient_ids = torch.tensor(pids, dtype=torch.int64, device=device)
-    index_times = torch.tensor(idx_t, dtype=torch.int64, device=device)
-
-    toks = torch.cat([ex["input_ids"] for ex in batch])
-
-    result = {
-        "input_ids": toks,
-        "ages": ages,
-        "normalized_ages": anorm,
-        "patient_lengths": patient_lengths,
-        "label_indices": label_indices,
-        "patient_ids": patient_ids,
-        "index_times": index_times,
-        "task": {
-            "labels": lbls[label_indices],
-        },
-    }
-
-    return result
-
-
-# -----------------------------------------------------------------------------
 # Rotary positional helpers
 # -----------------------------------------------------------------------------
 def _rotate_every_two(x: torch.Tensor) -> torch.Tensor:
@@ -184,7 +143,11 @@ class DenseTransformer(nn.Module):
         self.in_norm = RMSNorm(config.hidden_size)
         self.out_norm = RMSNorm(config.hidden_size)
 
-        self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
+        if getattr(config, "input_mode", "discrete") == "embedding":
+            # Placeholder — set via set_input_encoder() after model creation
+            self.embed = None
+        else:
+            self.embed = nn.Embedding(config.vocab_size, config.hidden_size)
 
         self.layers = nn.ModuleList([DenseTransformerDecoderLayer(config) for _ in range(config.n_layers)])
 
@@ -198,8 +161,15 @@ class DenseTransformer(nn.Module):
         else:
             self._dense_mask = [(i % interval == 0) for i in range(config.n_layers)]
 
+    def set_input_encoder(self, encoder: nn.Module) -> None:
+        """Replace the embedding layer with a DualPathInputEncoder."""
+        self.embed = encoder
+
     def forward(self, batch: Mapping[str, Any]) -> torch.Tensor:
-        x = self.embed(batch["input_ids"])
+        if getattr(self.config, "input_mode", "discrete") == "embedding":
+            x = self.embed(batch["embedding_text_ids"], batch.get("numeric_features"))
+        else:
+            x = self.embed(batch["input_ids"])
 
         x = self.in_norm(x)
         head_dim = self.config.hidden_size // self.config.n_heads
@@ -245,7 +215,10 @@ class EHRFM(transformers.PreTrainedModel):
         if "task" in kwargs:
             config.task = kwargs["task"]
 
-        self.main_input_name = "input_ids"
+        if getattr(config.transformer, "input_mode", "discrete") == "embedding":
+            self.main_input_name = "embedding_text_ids"
+        else:
+            self.main_input_name = "input_ids"
 
         self.transformer = DenseTransformer(config.transformer)
 

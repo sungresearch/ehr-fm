@@ -16,7 +16,7 @@ from ehr_fm.defaults import (
     REPEATABLE_INTERVAL_LABEL,
 )
 from ehr_fm.io import write_dict_to_json
-from ehr_fm.tokenizer import _build_interval_token_lookup, pretokenize_data
+from ehr_fm.pretokenize import _build_interval_token_lookup, pretokenize_data
 from ehr_fm.vocabulary import prepend_demographic_tokens, prepend_interval_tokens
 
 # ---------------------------------------------------------------------------

@@ -149,9 +149,21 @@ class TestMEDSReaderDataset:
 
     def test_split_none_loads_all(self, tmp_path, convert_meds_to_reader):
         meds_dir = _create_meds_dir(tmp_path / "meds")
+        # Two samples for the same subject in different splits.
+        birth_time = datetime(2000, 1, 1)
+        pl.DataFrame(
+            {
+                "id": [1, 1],
+                "index_t": [birth_time + timedelta(days=25), birth_time + timedelta(days=30)],
+                "split": ["train", "val"],
+            }
+        ).write_parquet(meds_dir / "metadata" / "samples.parquet")
         reader_path = convert_meds_to_reader(meds_dir)
-        ds = create_dataset({"dataset_path": str(reader_path)})
-        assert len(ds) > 0
+
+        # split=None loads every split; a split filter loads only its own rows.
+        assert len(create_dataset({"dataset_path": str(reader_path)})) == 2
+        assert len(create_dataset({"dataset_path": str(reader_path), "split": "train"})) == 1
+        assert len(create_dataset({"dataset_path": str(reader_path), "split": "val"})) == 1
 
     def test_custom_transform(self, tmp_path, convert_meds_to_reader):
         meds_dir = _create_meds_dir(tmp_path / "meds")
@@ -210,7 +222,10 @@ class TestTokenizedDatasetMultiWindow:
 
     def test_sliding_windows(self, pq_path):
         ds = TokenizedDataset(pq_path, max_length=8, stride=8, one_window=False)
-        assert len(ds) > 1
+        # length-20 sequence, max_length=8, stride=8 -> windows start at 12, 4, 0
+        # (stepping backwards from the end), tiling the sequence with no gap.
+        offsets = [ds.window_index[i][1] for i in range(len(ds))]
+        assert offsets == [12, 4, 0]
 
     def test_windows_cover_end(self, pq_path):
         """First window in the index should start at the tail of the sequence."""

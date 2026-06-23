@@ -62,12 +62,15 @@ class TestVisitEndTimeMoverGuards:
         mover = VisitEndTimeMover(VisitEndTimeConfig())
         result = mover(df)
         assert result.shape == df.shape
+        # Guard branch is a no-op: no event time was moved.
+        assert sorted(result["time"].to_list()) == sorted(df["time"].to_list())
 
     def test_missing_code(self):
         df = _build_visit_df(include_code=False)
         mover = VisitEndTimeMover(VisitEndTimeConfig())
         result = mover(df)
         assert result.shape == df.shape
+        assert sorted(result["time"].to_list()) == sorted(df["time"].to_list())
 
 
 class TestVisitEndTimeMoverNoVisits:
@@ -84,6 +87,8 @@ class TestVisitEndTimeMoverNoVisits:
         mover = VisitEndTimeMover(VisitEndTimeConfig())
         result = mover(df)
         assert result.shape == df.shape
+        # No VISIT events -> nothing to anchor to -> all times unchanged.
+        assert sorted(result["time"].to_list()) == sorted(df["time"].to_list())
 
 
 class TestVisitEndTimeMoverHappyPath:

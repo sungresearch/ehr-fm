@@ -5,28 +5,41 @@ from datetime import datetime, timedelta
 import pytest
 
 from ehr_fm.vocabulary import QuantilePreScanner
+from ehr_fm.vocabulary.statistics import compute_quantile_breaks
 
 
-class TestQuantilePreScannerInit:
-    """Test QuantilePreScanner initialization."""
+class TestComputeQuantileBreaks:
+    """Unit tests for the shared compute_quantile_breaks helper.
 
-    def test_default_init(self):
-        """Initialize with defaults."""
-        scanner = QuantilePreScanner()
-        assert scanner.num_quantiles == 10
-        assert scanner.reservoir_size == 10000
-        assert len(scanner.reservoirs) == 0
-        assert len(scanner.discovered_stages) == 0
+    Both QuantilePreScanner.compute_breaks and FactorizedVocab.get_quantile_breaks
+    route through this function, so its contract is asserted directly here.
+    """
 
-    def test_custom_quantiles(self):
-        """Initialize with custom num_quantiles."""
-        scanner = QuantilePreScanner(num_quantiles=5)
-        assert scanner.num_quantiles == 5
+    def test_sorts_input(self):
+        """Breaks are computed on sorted samples regardless of input order."""
+        unsorted = [160.0, 60.0, 120.0, 80.0, 140.0, 100.0]
+        breaks = compute_quantile_breaks(unsorted, num_quantiles=3)
+        assert breaks == sorted(breaks)
 
-    def test_custom_reservoir_size(self):
-        """Initialize with custom reservoir_size."""
-        scanner = QuantilePreScanner(reservoir_size=1000)
-        assert scanner.reservoir_size == 1000
+    def test_invariant_returns_empty(self):
+        """All-identical samples → empty breaks list."""
+        assert compute_quantile_breaks([5.0, 5.0, 5.0], num_quantiles=5) == []
+
+    def test_num_quantiles_one_returns_empty(self):
+        """num_quantiles=1 produces no interior breaks (no IndexError)."""
+        assert compute_quantile_breaks([1.0, 2.0, 3.0], num_quantiles=1) == []
+
+    def test_deduplicates_consecutive(self):
+        """Consecutive identical break points are collapsed."""
+        samples = [0.0, 0.0, 0.0, 100.0]
+        breaks = compute_quantile_breaks(samples, num_quantiles=5)
+        assert len(breaks) == len(set(breaks))
+
+    def test_break_count_bounded_by_quantiles(self):
+        """At most num_quantiles - 1 break points are returned."""
+        samples = [float(i) for i in range(100)]
+        breaks = compute_quantile_breaks(samples, num_quantiles=4)
+        assert len(breaks) <= 3
 
 
 class TestQuantilePreScannerForward:
