@@ -341,7 +341,7 @@ def main():
             text_embedding=text_embedding,
             hidden_size=config.hidden_size,
             use_numerical_path=getattr(args, "use_numerical_path", True),
-            numerical_input_dim=getattr(config, "numerical_input_dim", 5),
+            numerical_input_dim=getattr(config, "numerical_input_dim", 4),
             numerical_hidden_dim=getattr(config, "numerical_hidden_dim", 128),
         )
         model.transformer.set_input_encoder(encoder)

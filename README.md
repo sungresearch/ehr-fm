@@ -1,6 +1,6 @@
 # EHR-FM
 
-A Python package for training **embedding-first foundation models** on electronic health record data in [MEDS Reader](https://github.com/som-shahlab/meds_reader) format. Events are described in natural language, encoded with a frozen text-embedding model, and modeled by a transformer whose positions are calibrated to clinical time. The package supports two input modes — a **discrete** vocabulary path and an **embedding** path — from a shared preprocessing and vocabulary base.
+A Python package for training **language-grounded, portable EHR foundation models** on electronic health record data in [MEDS Reader](https://github.com/som-shahlab/meds_reader) format. It is the training code behind **PORTER** (Portable EHR Representations): each clinical event is paired with a natural-language description, encoded with a frozen text-embedding model, optionally modulated by numeric values through a **numeric pathway via FiLM**, and modeled by a transformer whose positions are calibrated to clinical time. The package supports two input modes from a shared preprocessing and vocabulary base — an **embedding** path (PORTER; vocabulary-independent and transferable across datasets) and a **discrete** path (a fixed-vocabulary comparator).
 
 ## Requirements
 
@@ -65,9 +65,9 @@ After optional preprocessing and vocabulary training (shared), the pipeline spli
                                 │
               ┌─────────────────┴───────────────────┐
        DISCRETE mode                          EMBEDDING mode
+       (Fixed-Vocab FM)                       (PORTER)
               │                                       │
         pretokenize                       build_embedding_lookup    → embedding table
-              │                           compute_numeric_stats     → numeric_stats.json (legacy_zscore only)
               │                           pretokenize_embedding
               │                                       │
    train_ehr_fm (--input_mode             train_ehr_fm --input_mode embedding
@@ -87,29 +87,18 @@ After optional preprocessing and vocabulary training (shared), the pipeline spli
 3. **Tokenization** (`pretokenize`) — convert events to integer token sequences using `vocab.json`.
 4. **Training** (`train_ehr_fm`) — train on tokenized data (`--input_mode discrete`, the default).
 
-### Embedding mode
+### Embedding mode (PORTER)
 
-3. **Embedding lookup** (`build_embedding_lookup`) — encode each unique `embedding_text` string with a frozen text model into a lookup table (run once per dataset).
-4. **Numeric stats** (`compute_numeric_stats`) — optional; precompute per-code log statistics (`numeric_stats.json`) needed only by the `legacy_zscore` numeric pathway.
-5. **Tokenization** (`pretokenize_embedding`) — convert events to event-level rows of (embedding-text id, next-token label, numeric feature vector).
-6. **Training** (`train_ehr_fm --input_mode embedding --embedding_lookup_path …`) — add `--use_numerical_path` for the dual-path (FiLM numerical) encoder, or `--no-use_numerical_path` for text-only.
+3. **Embedding lookup** (`build_embedding_lookup`) — encode each unique `embedding_text` string with a frozen text model into a lookup table (run once per dataset). The PORTER manuscript uses **BioLORD-2023** as its primary text encoder.
+4. **Tokenization** (`pretokenize_embedding`) — convert events to event-level rows of (embedding-text id, next-event label, numeric feature vector).
+5. **Training** (`train_ehr_fm --input_mode embedding --embedding_lookup_path …`) — add `--use_numerical_path` for the numeric pathway via FiLM, or `--no-use_numerical_path` for text-only.
 
 ### Both modes
 
 7. **Representations** (`compute_representations`) — extract patient embeddings from a trained model, using the same `--input_mode` it was trained with.
 
-### Model / input-mode matrix
-
-| Model variant     | Input mode | Needs embedding lookup | Transfer across datasets |
-| ----------------- | ---------- | ---------------------- | ------------------------ |
-| `*_joint_ntp`     | discrete   | No                     | No (vocabulary-specific) |
-| `*_emb_only_ntp`  | embedding  | Yes                    | Yes                      |
-| `*_dual_path_ntp` | embedding  | Yes (+ numerical path) | Yes                      |
-
-Only embedding-mode models transfer across datasets; discrete models are tied to their training vocabulary.
-
 ## Further Reading
 
 - [Tutorial](tutorials/tutorial.ipynb) — end-to-end notebook walking through vocabulary training, tokenization, model training, and representation extraction on synthetic data
-- [CLI Documentation](ehr_fm/scripts/README.md) — detailed usage, arguments, and examples for all eight commands
+- [CLI Documentation](ehr_fm/scripts/README.md) — detailed usage, arguments, and examples for all seven commands
 - [Data Module](ehr_fm/data/README.md) — dataset classes, collation, and batch sampling

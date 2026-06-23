@@ -5,8 +5,7 @@ path is otherwise untested (the existing test_pretokenize_embedding.py only driv
 _init_worker/_process_row in-process). Runs the CLI in a fresh-interpreter
 subprocess with a hard timeout -- so a genuine pool deadlock fails loudly instead
 of hanging the suite -- and asserts the parallel output (--workers 2) is
-byte-identical to the sequential output (--workers 0), for both numeric pathway
-modes (their feature-construction code paths are independent).
+byte-identical to the sequential output (--workers 0).
 
 Because the embedding pretokenizer currently exposes only an argparse ``main()``,
 both paths are driven through the CLI. The comparison is invariant to the
@@ -25,9 +24,7 @@ import pytest
 _WATCHDOG_TIMEOUT_S = 120
 
 
-def _run_embedding_cli(
-    *, dataset_path, vocab_path, lookup_dir, out_dir, num_workers, numeric_pathway_mode, numeric_stats_path
-):
+def _run_embedding_cli(*, dataset_path, vocab_path, lookup_dir, out_dir, num_workers, numeric_pathway_mode):
     """Run the embedding pretokenize CLI in a fresh interpreter, under a timeout."""
     cmd = [
         sys.executable,
@@ -50,8 +47,6 @@ def _run_embedding_cli(
         "--numeric_pathway_mode",
         numeric_pathway_mode,
     ]
-    if numeric_stats_path is not None:
-        cmd += ["--numeric_stats_path", str(numeric_stats_path)]
     try:
         proc = subprocess.run(cmd, timeout=_WATCHDOG_TIMEOUT_S, capture_output=True, text=True)
     except subprocess.TimeoutExpired:
@@ -91,7 +86,7 @@ def embedding_dataset(tmp_path, convert_meds_to_reader):
         )
         n_labs = (pid % 3) + 1
         for j in range(n_labs):
-            has_ref = j % 2 == 0  # exercise both ref-range and log1p/zscore branches
+            has_ref = j % 2 == 0  # exercise both ref-range and log1p branches
             records.append(
                 {
                     "subject_id": pid,
@@ -170,29 +165,18 @@ def embedding_lookup_dir(tmp_path):
     return look
 
 
-@pytest.fixture
-def numeric_stats_path(tmp_path):
-    """numeric_stats.json keyed by full code, for the legacy_zscore pathway."""
-    p = tmp_path / "numeric_stats.json"
-    p.write_text(json.dumps({"LAB/glucose": {"log_mean": 2.0, "log_std": 0.5}}))
-    return p
-
-
 def _read_sorted(parquet_path):
     return pl.read_parquet(parquet_path).sort("subject_id")
 
 
 class TestEmbeddingPretokenizeMultiWorker:
-    @pytest.mark.parametrize("pathway_mode", ["ref_range_priority", "legacy_zscore"])
     def test_parallel_matches_sequential(
         self,
         embedding_dataset,
         embedding_vocab_path,
         embedding_lookup_dir,
-        numeric_stats_path,
-        pathway_mode,
     ):
-        stats = numeric_stats_path if pathway_mode == "legacy_zscore" else None
+        pathway_mode = "ref_range_priority"
         seq_dir = embedding_dataset / f"emb_seq_{pathway_mode}"
         par_dir = embedding_dataset / f"emb_par_{pathway_mode}"
 
@@ -201,7 +185,6 @@ class TestEmbeddingPretokenizeMultiWorker:
             vocab_path=embedding_vocab_path,
             lookup_dir=embedding_lookup_dir,
             numeric_pathway_mode=pathway_mode,
-            numeric_stats_path=stats,
         )
         _run_embedding_cli(out_dir=seq_dir, num_workers=0, **common)
         _run_embedding_cli(out_dir=par_dir, num_workers=2, **common)

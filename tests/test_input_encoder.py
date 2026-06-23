@@ -1,4 +1,4 @@
-"""Tests for the dual-path input encoder (Arm A1)."""
+"""Tests for the language-grounded input encoder (DualPathInputEncoder)."""
 
 import torch
 from torch import nn
@@ -54,34 +54,6 @@ class TestNumericalEncoder:
         gamma, beta = enc(x)
         assert torch.allclose(gamma, torch.ones_like(gamma))
         assert torch.allclose(beta, torch.zeros_like(beta))
-
-    def test_identity_init_dim15(self):
-        """Same identity init property with fourier_ref_range_priority feature dim."""
-        enc = NumericalEncoder(input_dim=15, hidden_dim=128, output_dim=768)
-        x = torch.zeros(1, 15)
-        gamma, beta = enc(x)
-        assert torch.allclose(gamma, torch.ones_like(gamma), atol=0.1)
-        assert torch.allclose(beta, torch.zeros_like(beta), atol=0.1)
-
-    def test_hard_gate_dim15_absent(self):
-        """Absent event: value_present=0 (last element) -> identity."""
-        enc = NumericalEncoder(input_dim=15, hidden_dim=64, output_dim=32)
-        x = torch.zeros(1, 15)  # all zeros including value_present=0
-        gamma, beta = enc(x)
-        assert torch.allclose(gamma, torch.ones_like(gamma))
-        assert torch.allclose(beta, torch.zeros_like(beta))
-
-    def test_hard_gate_dim15_present(self):
-        """Present event: value_present=1 (last element) -> MLP modulates."""
-        enc = NumericalEncoder(input_dim=15, hidden_dim=64, output_dim=32)
-        # Fourier features + [is_refrange=1, is_log1p=0, value_present=1]
-        x = torch.randn(1, 15)
-        x[0, -3] = 1.0  # is_refrange
-        x[0, -2] = 0.0  # is_log1p
-        x[0, -1] = 1.0  # value_present
-        gamma, beta = enc(x)
-        # At init, gamma ~1 and beta ~0 but not exactly gated to identity
-        assert gamma.shape == (1, 32)
 
 
 class TestDualPathInputEncoder:
@@ -224,28 +196,6 @@ class TestEmbeddingCollation:
         assert collated["numeric_features"].shape == (3, 4)
         assert torch.equal(collated["numeric_features"], torch.cat([f1, f2], dim=0))
 
-    def test_collate_with_dim15_numeric_features(self):
-        """fourier_ref_range_priority: 15-dim numeric features collate, values intact."""
-        from ehr_fm.data import packed_ehr_collate
-
-        feats = torch.arange(2 * 15, dtype=torch.float32).reshape(2, 15)
-        batch = [
-            {
-                "input_ids": torch.tensor([1, 2]),
-                "labels": torch.tensor([2, -100]),
-                "age": torch.tensor([0.0, 1.0]),
-                "age_normalized": torch.tensor([0.0, 0.1]),
-                "length": 2,
-                "patient_id": 1,
-                "index_time": 1000.0,
-                "embedding_text_ids": torch.tensor([10, 20]),
-                "numeric_features": feats,
-            },
-        ]
-        collated = packed_ehr_collate(batch)
-        assert collated["numeric_features"].shape == (2, 15)
-        assert torch.equal(collated["numeric_features"], feats)
-
     def test_collate_without_embedding_fields(self):
         """Backward compat: batch without embedding fields still works."""
         from ehr_fm.data import packed_ehr_collate
@@ -369,61 +319,6 @@ class TestEHRFMEmbeddingMode:
             "input_ids": torch.tensor([1, 2, 3, 4, 5]),
             "embedding_text_ids": torch.randint(0, num_embeddings, (5,)),
             "numeric_features": torch.randn(5, 4),
-            "ages": torch.tensor([0.0, 1.0, 2.0, 3.0, 4.0]),
-            "normalized_ages": torch.tensor([0.0, 0.1, 0.2, 0.3, 0.4]),
-            "patient_lengths": torch.tensor([5], dtype=torch.int32),
-            "label_indices": torch.tensor([0, 1, 2, 3]),
-            "task": {"labels": torch.tensor([2, 3, 4, 5])},
-        }
-
-        loss, result = model(batch)
-        assert loss.isfinite()
-        assert loss.shape == ()
-
-    def test_forward_fourier_ref_range_priority_mode(self):
-        """Full forward pass with 15-dim numeric features (fourier_ref_range_priority)."""
-        from ehr_fm.models.config import EHRFMConfig
-        from ehr_fm.models.transformer import EHRFM
-
-        num_embeddings = 50
-        embedding_dim = 32
-        hidden_size = 64
-
-        cfg = EHRFMConfig(
-            transformer={
-                "vocab_size": 100,
-                "hidden_size": hidden_size,
-                "intermediate_size": 96,
-                "n_heads": 4,
-                "n_layers": 2,
-                "attention_width": 128,
-                "input_mode": "embedding",
-                "embedding_dim": embedding_dim,
-                "use_numerical_path": True,
-                "numerical_input_dim": 15,
-                "numerical_hidden_dim": 16,
-                "numeric_pathway_mode": "fourier_ref_range_priority",
-            },
-            task={"task_type": "sequence_classification", "n_classes": 100},
-        )
-
-        model = EHRFM(cfg)
-
-        text_emb = nn.Embedding(num_embeddings, embedding_dim)
-        text_emb.weight.requires_grad = False
-        encoder = DualPathInputEncoder(
-            text_embedding=text_emb,
-            hidden_size=hidden_size,
-            use_numerical_path=True,
-            numerical_input_dim=15,
-            numerical_hidden_dim=16,
-        )
-        model.transformer.set_input_encoder(encoder)
-
-        batch = {
-            "input_ids": torch.tensor([1, 2, 3, 4, 5]),
-            "embedding_text_ids": torch.randint(0, num_embeddings, (5,)),
-            "numeric_features": torch.randn(5, 15),
             "ages": torch.tensor([0.0, 1.0, 2.0, 3.0, 4.0]),
             "normalized_ages": torch.tensor([0.0, 0.1, 0.2, 0.3, 0.4]),
             "patient_lengths": torch.tensor([5], dtype=torch.int32),

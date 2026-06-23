@@ -182,8 +182,8 @@ def prepare_model(args, device, logger):
         transformer_config_dict["use_numerical_path"] = args.use_numerical_path
         transformer_config_dict["numerical_hidden_dim"] = args.numerical_hidden_dim
 
-        numeric_pathway_mode = getattr(args, "numeric_pathway_mode", "legacy_zscore")
-        mode_to_dim = {"legacy_zscore": 5, "ref_range_priority": 4}
+        numeric_pathway_mode = getattr(args, "numeric_pathway_mode", "ref_range_priority")
+        mode_to_dim = {"ref_range_priority": 4}
         expected_dim = mode_to_dim[numeric_pathway_mode]
 
         explicit_dim = getattr(args, "numerical_input_dim", None)
@@ -215,7 +215,7 @@ def prepare_model(args, device, logger):
         logger.info("Initializing model with random weights.")
         model = EHRFM(cfg)
 
-    # Wire up the dual-path input encoder in embedding mode
+    # Wire up the language-grounded input encoder (text + optional FiLM numeric pathway) in embedding mode
     if input_mode == "embedding":
         freeze = getattr(args, "freeze_text_embedding", True)
         text_embedding = embedding_lookup.as_torch_embedding(freeze=freeze)
@@ -588,7 +588,7 @@ def main():
         type=str,
         default="discrete",
         choices=["discrete", "embedding"],
-        help="Input mode: 'discrete' for token IDs, 'embedding' for dual-path text embeddings.",
+        help="Input mode: 'discrete' for token IDs, 'embedding' for language-grounded text embeddings.",
     )
     embed_args.add_argument(
         "--embedding_lookup_path",
@@ -611,10 +611,10 @@ def main():
     embed_args.add_argument(
         "--numeric_pathway_mode",
         type=str,
-        choices=["legacy_zscore", "ref_range_priority"],
-        default="legacy_zscore",
+        choices=["ref_range_priority"],
+        default="ref_range_priority",
         help="Numeric feature construction mode used during pretokenization. "
-        "'legacy_zscore': 5-dim features (default). 'ref_range_priority': 4-dim features. "
+        "'ref_range_priority': 4-dim institution-invariant features. "
         "Automatically sets numerical_input_dim unless explicitly overridden.",
     )
     embed_args.add_argument(
@@ -622,19 +622,13 @@ def main():
         type=int,
         default=None,
         help="Dimension of the numerical feature vector. Auto-derived from numeric_pathway_mode "
-        "if not set (legacy_zscore=5, ref_range_priority=4).",
+        "if not set (ref_range_priority=4).",
     )
     embed_args.add_argument(
         "--numerical_hidden_dim",
         type=int,
         default=128,
         help="Hidden dimension of the NumericalEncoder MLP.",
-    )
-    embed_args.add_argument(
-        "--numeric_stats_path",
-        type=str,
-        default=None,
-        help="Path to numeric_stats.json (optional, for logging).",
     )
 
     training_args_group = parser.add_argument_group("HuggingFace Training Arguments")

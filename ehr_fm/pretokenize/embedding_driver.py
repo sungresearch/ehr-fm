@@ -28,10 +28,7 @@ def pretokenize_embedding_data(
     dataset_path: PathLike,
     samples_path: PathLike | None = None,
     split: str | None = None,
-    numeric_stats_path: PathLike | None = None,
-    numeric_pathway_mode: str = "legacy_zscore",
-    numeric_override_mode: str = "none",
-    numeric_quantile_breaks_path: PathLike | None = None,
+    numeric_pathway_mode: str = "ref_range_priority",
     num_workers: int = -1,
     vocab_size: int | None = None,
     row_group_size: int = 32768,
@@ -39,6 +36,12 @@ def pretokenize_embedding_data(
 ):
     """Pretokenize MEDS data for the embedding input mode and write Parquet."""
     logger = setup_logging(child_name="pretokenize_embedding")
+
+    if numeric_pathway_mode != "ref_range_priority":
+        raise ValueError(
+            f"Unsupported numeric_pathway_mode={numeric_pathway_mode!r}; "
+            "only 'ref_range_priority' is supported."
+        )
 
     dataset_path = Path(dataset_path)
 
@@ -67,11 +70,7 @@ def pretokenize_embedding_data(
     init_args = (
         vocab_path,
         embedding_lookup_path,
-        numeric_stats_path,
         vocab_size,
-        numeric_override_mode,
-        numeric_quantile_breaks_path,
-        numeric_pathway_mode,
     )
 
     if effective_num_workers > 1:

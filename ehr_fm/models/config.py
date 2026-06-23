@@ -26,9 +26,9 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
         input_mode: str = "discrete",
         embedding_dim: int = 4096,
         use_numerical_path: bool = True,
-        numerical_input_dim: int = 5,
+        numerical_input_dim: int = 4,
         numerical_hidden_dim: int = 128,
-        numeric_pathway_mode: str = "legacy_zscore",
+        numeric_pathway_mode: str = "ref_range_priority",
         **kwargs,
     ) -> None:
         """Defines a configuration for an EHRFM Transformer.
@@ -52,16 +52,16 @@ class DenseTransformerConfig(transformers.PretrainedConfig):
                             theta ~100M (extended range for long sequences)
             separate_rope_by_attention: If True, use different RoPE configurations for sparse vs global attention.
                                       If False, use rope_base_global for all layers
-            input_mode: "discrete" for standard token embedding, "embedding" for dual-path text embedding input
-            embedding_dim: Dimension of the frozen text embeddings (default 4096 for Qwen3-Embedding-8B)
-            use_numerical_path: Whether to use the FiLM numerical encoder (False = text-only mode)
-            numerical_input_dim: Dimension of the numerical feature vector
+            input_mode: "discrete" for a learned token-embedding table, "embedding" for the
+                language-grounded text-embedding input (frozen text embeddings + optional FiLM numeric path)
+            embedding_dim: Dimension of the frozen text embeddings (e.g. 768 for BioLORD-2023,
+                4096 for Qwen3-Embedding-8B)
+            use_numerical_path: Whether to use the FiLM numeric pathway (False = text-only mode)
+            numerical_input_dim: Dimension of the numeric feature vector (4 for ref_range_priority)
             numerical_hidden_dim: Hidden dimension of the NumericalEncoder MLP
             numeric_pathway_mode: Which numeric feature construction was used for pretokenization.
-                "legacy_zscore" (default): 5-dim vector [log_zscore, quantile, ref_range_pos, ref_range_avail, present].
-                "ref_range_priority": 4-dim institution-invariant vector [x_primary, is_refrange, is_log1p, present].
-                "fourier_ref_range_priority": 15-dim vector [fourier(12), is_refrange, is_log1p, present].
-                    Same scalar+flag logic as ref_range_priority; x_primary replaced by sinusoidal expansion.
+                "ref_range_priority" (default): 4-dim institution-invariant vector
+                    [x_primary, is_refrange, is_log1p, value_present].
                 Serialized into checkpoint config.json for compatibility verification.
         """
         super().__init__(**kwargs)

@@ -1,8 +1,8 @@
-"""Dual-path input encoder for embedding-mode EHRFM (Arm A1).
+"""Language-grounded input encoder for embedding-mode EHRFM.
 
-Replaces discrete nn.Embedding with:
-- Frozen text embedding lookup → learned projection
-- Optional FiLM-style modulation over numeric event features.
+Replaces the discrete nn.Embedding with the PORTER event-input pathway:
+- Frozen text-embedding lookup over event descriptions → learned projection (description pathway)
+- Optional FiLM modulation from numeric event features (numeric pathway)
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ class NumericalEncoder(nn.Module):
 
 
 class DualPathInputEncoder(nn.Module):
-    """Dual-path input encoder: frozen text embedding + optional FiLM numeric path.
+    """Language-grounded input encoder: frozen text-embedding (description) pathway + optional FiLM numeric pathway.
 
     Replaces nn.Embedding in embedding mode. Output shape matches (seq_len, hidden_size).
     State_dict keys: ``text_projection.*`` and (when use_numerical_path)

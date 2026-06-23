@@ -5,7 +5,7 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry]
 name = "ehr_fm"
 version = "0.1.0"
-description = "A package to train Foundation Models leveraging the MEDS EHR data format"
+description = "Training code for PORTER (language-grounded) and fixed-vocabulary EHR foundation models on the MEDS data format"
 authors = [
     "Lin Lawrence Guo <lawrence.guo@sickkids.ca>",
 ]
@@ -41,7 +41,6 @@ train_ehr_fm = "ehr_fm.scripts.train_ehr_fm:main"
 apply_meds_transforms = "ehr_fm.scripts.apply_meds_transforms:main"
 build_embedding_lookup = "ehr_fm.scripts.build_embedding_lookup:main"
 pretokenize_embedding = "ehr_fm.scripts.pretokenize_embedding:main"
-compute_numeric_stats = "ehr_fm.scripts.compute_numeric_stats:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

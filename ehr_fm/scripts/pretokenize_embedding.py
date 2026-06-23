@@ -23,31 +23,19 @@ def main():
         "--embedding_lookup_path", type=str, required=True, help="Path to embedding lookup artifacts dir."
     )
     parser.add_argument(
-        "--numeric_stats_path", type=str, default=None, help="Path to numeric_stats.json (optional)."
+        "--numeric_stats_path",
+        type=str,
+        default=None,
+        help="Deprecated and ignored. The ref_range_priority pathway needs no precomputed "
+        "stats; accepted only for backward compatibility with older pipeline scripts.",
     )
     parser.add_argument(
         "--numeric_pathway_mode",
         type=str,
-        choices=["legacy_zscore", "ref_range_priority"],
-        default="legacy_zscore",
-        help="Numeric feature construction mode. 'legacy_zscore': 5-dim vector using numeric_stats.json. "
-        "'ref_range_priority': 4-dim institution-invariant vector (no external stats required).",
-    )
-    parser.add_argument(
-        "--numeric_override_mode",
-        type=str,
-        choices=["none", "zero"],
-        default="none",
-        help="'none': standard numeric features. 'zero': force z-score=0, quantile=0.5 for all events. "
-        "Only applicable under legacy_zscore pathway mode.",
-    )
-    parser.add_argument(
-        "--numeric_quantile_breaks_path",
-        type=str,
-        default=None,
-        help="Override quantile_breaks source for numeric features. Accepts a vocab.json "
-        "(extracts quantile_breaks key) or a bare {code: [breaks]} JSON dict. "
-        "Only applicable under legacy_zscore pathway mode.",
+        choices=["ref_range_priority"],
+        default="ref_range_priority",
+        help="Numeric feature construction mode. 'ref_range_priority': 4-dim institution-invariant "
+        "vector [x_primary, is_refrange, is_log1p, value_present] (no external stats required).",
     )
     parser.add_argument("--out_dir", type=str, required=True, help="Output directory.")
     parser.add_argument("--split", type=str, default=None, help="Data split (default: all splits).")
@@ -65,10 +53,7 @@ def main():
         dataset_path=args.dataset_path,
         samples_path=args.samples_path,
         split=args.split,
-        numeric_stats_path=args.numeric_stats_path,
         numeric_pathway_mode=args.numeric_pathway_mode,
-        numeric_override_mode=args.numeric_override_mode,
-        numeric_quantile_breaks_path=args.numeric_quantile_breaks_path,
         num_workers=args.workers,
         vocab_size=args.vocab_size,
         row_group_size=args.row_group_size,

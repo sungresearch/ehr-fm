@@ -7,7 +7,6 @@ import pytest
 from ehr_fm.pretokenize.embedding_numeric import (
     LOG1P_SCALE_CONSTANT,
     MIN_REF_RANGE_WIDTH,
-    _compute_numeric_features,
     _compute_numeric_features_ref_range_priority,
 )
 
@@ -213,26 +212,3 @@ class TestRefRangePriority:
         for event in [{"numeric_value": None}, {"numeric_value": float("nan")}]:
             result = _compute_numeric_features_ref_range_priority(event)
             assert result == [0.0, 0.0, 0.0, 0.0]
-
-
-class TestLegacyZscoreUnchanged:
-    """Sanity check that _compute_numeric_features still produces 5-dim vectors."""
-
-    def test_null_value(self):
-        event = {"numeric_value": None}
-        result = _compute_numeric_features(event, "LAB/123", {}, {})
-        assert result == [0.0, 0.0, 0.0, 0.0, 0.0]
-
-    def test_with_ref_range(self):
-        event = {"numeric_value": 5.0, "ref_low": 4.0, "ref_high": 6.0}
-        result = _compute_numeric_features(event, "LAB/123", {}, {})
-        assert len(result) == 5
-        assert result[4] == 1.0  # value_present
-        assert result[3] == 1.0  # ref_range_available
-
-    def test_without_ref_range(self):
-        event = {"numeric_value": 5.0}
-        result = _compute_numeric_features(event, "LAB/123", {}, {})
-        assert len(result) == 5
-        assert result[4] == 1.0  # value_present
-        assert result[3] == 0.0  # ref_range_available

@@ -11,14 +11,12 @@ live in this module so they share one module-global (_worker_state) per worker.
 import dataclasses
 import datetime
 import json
-import os
 from pathlib import Path
 
 import pyarrow as pa
 
 from ehr_fm.io import read_json_yaml
 from ehr_fm.pretokenize.embedding_numeric import (
-    _compute_numeric_features,
     _compute_numeric_features_ref_range_priority,
 )
 from ehr_fm.pretokenize.lookups import _build_token_string_lookup
@@ -32,10 +30,6 @@ class _EmbeddingWorkerState:
     policy: TokenizationPolicy
     token_lookup: dict[str, int]
     embedding_text_to_id: dict[str, int]
-    numeric_stats: dict
-    quantile_breaks: dict
-    numeric_override_mode: str
-    numeric_pathway_mode: str
     age_mean: float
     age_std: float
     vocab_size: int
@@ -47,11 +41,7 @@ _worker_state: "_EmbeddingWorkerState | None" = None
 def _init_worker(
     vocab_path,
     embedding_lookup_path,
-    numeric_stats_path,
     vocab_size,
-    numeric_override_mode="none",
-    numeric_quantile_breaks_path=None,
-    numeric_pathway_mode="legacy_zscore",
 ):
     global _worker_state
 
@@ -84,35 +74,12 @@ def _init_worker(
     with open(Path(embedding_lookup_path) / "id_mapping.json") as f:
         embedding_text_to_id = json.load(f)
 
-    numeric_stats = {}
-    numeric_quantile_breaks = {}
-
-    if numeric_pathway_mode == "legacy_zscore":
-        if numeric_stats_path and os.path.exists(numeric_stats_path):
-            with open(numeric_stats_path) as f:
-                numeric_stats = json.load(f)
-
-        # Override quantile_breaks for numeric features if a separate source is provided.
-        # JointPolicy retains the main vocab's breaks for NTP label emission.
-        numeric_quantile_breaks = quantile_breaks
-        if numeric_quantile_breaks_path and os.path.exists(numeric_quantile_breaks_path):
-            with open(numeric_quantile_breaks_path) as f:
-                qb_data = json.load(f)
-            if "quantile_breaks" in qb_data:
-                numeric_quantile_breaks = qb_data["quantile_breaks"]
-            else:
-                numeric_quantile_breaks = qb_data
-
     effective_vocab_size = vocab_size if vocab_size else len(vocab_entries)
 
     _worker_state = _EmbeddingWorkerState(
         policy=policy,
         token_lookup=token_lookup,
         embedding_text_to_id=embedding_text_to_id,
-        numeric_stats=numeric_stats,
-        quantile_breaks=numeric_quantile_breaks,
-        numeric_override_mode=numeric_override_mode,
-        numeric_pathway_mode=numeric_pathway_mode,
         age_mean=age_stats["mean"],
         age_std=age_stats["std"],
         vocab_size=effective_vocab_size,
@@ -136,10 +103,6 @@ def _process_row(row, *, vocab_size):
     policy = _worker_state.policy
     token_lookup = _worker_state.token_lookup
     embedding_text_to_id = _worker_state.embedding_text_to_id
-    numeric_stats = _worker_state.numeric_stats
-    quantile_breaks = _worker_state.quantile_breaks
-    numeric_override_mode = _worker_state.numeric_override_mode
-    numeric_pathway_mode = _worker_state.numeric_pathway_mode
     age_mean = _worker_state.age_mean
     age_std = _worker_state.age_std
     effective_vocab_size = vocab_size or _worker_state.vocab_size
@@ -151,8 +114,6 @@ def _process_row(row, *, vocab_size):
     ages_normalized = []
 
     for event in seq:
-        code = event.get("code", "")
-
         # Get embedding_text → embedding_text_id
         embedding_text = event.get("embedding_text")
         if embedding_text is None:
@@ -170,12 +131,7 @@ def _process_row(row, *, vocab_size):
             if tok_id is None or tok_id >= effective_vocab_size:
                 tok_id = -100
 
-        if numeric_pathway_mode == "ref_range_priority":
-            num_feat = _compute_numeric_features_ref_range_priority(event)
-        else:
-            num_feat = _compute_numeric_features(
-                event, code, numeric_stats, quantile_breaks, numeric_override_mode
-            )
+        num_feat = _compute_numeric_features_ref_range_priority(event)
 
         # Compute age
         time_diff = event["time"] - birth_t

@@ -16,9 +16,7 @@ import ehr_fm.pretokenize.embedding_worker as pe
 T0 = datetime.datetime(2000, 1, 1)
 
 
-def _setup_worker(
-    tmp_path, *, vocab_codes, id_mapping, vocab_size, numeric_pathway_mode="ref_range_priority"
-):
+def _setup_worker(tmp_path, *, vocab_codes, id_mapping, vocab_size):
     """Write a tiny vocab.json + EmbeddingLookup and initialize the worker state."""
     vocab = {
         "vocab": [{"type": "code", "code_string": c} for c in vocab_codes],
@@ -45,9 +43,7 @@ def _setup_worker(
     )
     (look / "metadata.json").write_text(json.dumps({"model_name": "test"}))
 
-    pe._init_worker(
-        str(tmp_path / "vocab.json"), str(look), None, vocab_size, numeric_pathway_mode=numeric_pathway_mode
-    )
+    pe._init_worker(str(tmp_path / "vocab.json"), str(look), vocab_size)
 
 
 def _event(code, embedding_text, day, **extra):
@@ -111,21 +107,6 @@ class TestProcessRow:
         seq = [_event("MEDS_BIRTH", "birth", 0), _event("A", "a", 1), _event("B", "b", 2)]
         out = pe._process_row(_row(seq), vocab_size=2)
         assert out["token_ids"].to_pylist() == [0, 1, -100]
-
-    def test_legacy_zscore_produces_5dim_features(self, tmp_path):
-        _setup_worker(
-            tmp_path,
-            vocab_codes=["MEDS_BIRTH", "LAB/glucose"],
-            id_mapping={"birth": 0, "glucose": 1},
-            vocab_size=2,
-            numeric_pathway_mode="legacy_zscore",
-        )
-        seq = [
-            _event("MEDS_BIRTH", "birth", 0),
-            _event("LAB/glucose", "glucose", 1, numeric_value=5.0, ref_low=4.0, ref_high=6.0),
-        ]
-        out = pe._process_row(_row(seq), vocab_size=2)
-        assert len(out["numeric_features"][1].to_pylist()) == 5
 
     def test_all_events_oov_returns_none(self, tmp_path):
         _setup_worker(tmp_path, vocab_codes=["MEDS_BIRTH"], id_mapping={"birth": 0}, vocab_size=1)

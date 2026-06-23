@@ -8,7 +8,7 @@ All scripts are exposed as CLI commands via the `pyproject.toml` configuration.
 
 ## Available Commands
 
-The eight commands group by pipeline stage. The **mode** column indicates whether a command is shared, or specific to the discrete or embedding input path (see the [main README](../../README.md#pipeline-overview) for how the two paths fit together).
+The seven commands group by pipeline stage. The **mode** column indicates whether a command is shared, or specific to the discrete (fixed-vocabulary) or embedding (language-grounded / PORTER) input path (see the [main README](../../README.md#pipeline-overview) for how the two paths fit together).
 
 | Command                                               | Stage           | Mode      | Role                                                   |
 | ----------------------------------------------------- | --------------- | --------- | ------------------------------------------------------ |
@@ -16,7 +16,6 @@ The eight commands group by pipeline stage. The **mode** column indicates whethe
 | [`train_vocabulary`](#train_vocabulary)               | Vocabulary      | shared    | Build `vocab.json` (joint or factorized)               |
 | [`pretokenize`](#pretokenize)                         | Tokenize        | discrete  | Events → integer token sequences                       |
 | [`build_embedding_lookup`](#build_embedding_lookup)   | Embedding setup | embedding | Encode `embedding_text` → frozen lookup table          |
-| [`compute_numeric_stats`](#compute_numeric_stats)     | Embedding setup | embedding | Per-code log stats (`legacy_zscore` pathway only)      |
 | [`pretokenize_embedding`](#pretokenize_embedding)     | Tokenize        | embedding | Events → embedding ids + labels + numeric features     |
 | [`train_ehr_fm`](#train_ehr_fm)                       | Train           | both      | Train the model (`--input_mode discrete \| embedding`) |
 | [`compute_representations`](#compute_representations) | Representations | both      | Extract patient embeddings from a trained model        |
@@ -223,7 +222,7 @@ Standard **MEDS** dataset root (`--meds_dir`) whose `data/*.parquet` files conta
 
 ### Common Options
 
-- `--model_name` - HuggingFace text-embedding model (default: `Qwen/Qwen3-Embedding-8B`)
+- `--model_name` - HuggingFace text-embedding model (default: `Qwen/Qwen3-Embedding-8B`). The PORTER manuscript uses **BioLORD-2023** (`FremyCompany/BioLORD-2023`) as its primary encoder; pass `--model_name` to select it or another encoder.
 - `--batch_size` - Batch size for GPU inference (default: 64)
 - `--device` - Inference device (default: `cuda`)
 - `--dtype` - Storage precision: `float16` (default) or `float32`
@@ -240,39 +239,6 @@ build_embedding_lookup \
 
 ______________________________________________________________________
 
-## `compute_numeric_stats`
-
-**(Embedding mode, optional.)** Precompute per-code log-transform statistics used by the `legacy_zscore` numeric pathway of `pretokenize_embedding`. Not needed for the `ref_range_priority` pathway.
-
-### Input
-
-**MEDS Reader** directory (`--dataset_path`) and its `samples.parquet`.
-
-### Output
-
-`numeric_stats.json` (`--output_path`): per code, `{log_mean, log_std, n_samples}`.
-
-### Required Arguments
-
-- `--dataset_path` - Path to the MEDS Reader dataset
-- `--output_path` - Output path for `numeric_stats.json`
-
-### Common Options
-
-- `--samples_path` - Path to samples.parquet (default: `{dataset_path}/metadata/samples.parquet`)
-- `--split` - Data split to scan (default: all samples)
-
-### Example Usage
-
-```bash
-compute_numeric_stats \
-  --dataset_path /path/to/meds_reader_data \
-  --output_path /path/to/numeric_stats.json \
-  --split train
-```
-
-______________________________________________________________________
-
 ## `pretokenize_embedding`
 
 **(Embedding mode.)** The embedding-path counterpart to `pretokenize`. Produces **event-level** rows (one per event) instead of token sequences: each event maps to an embedding-text id, a next-token-prediction label, and a numeric feature vector. Joint-mode labels only; no interval/demographic injection.
@@ -282,22 +248,21 @@ ______________________________________________________________________
 - **MEDS Reader** directory (`--dataset_path`) with an `embedding_text` field on events
 - `vocab.json` from `train_vocabulary` (`--vocab_path`) -- for the NTP labels
 - Embedding lookup directory from `build_embedding_lookup` (`--embedding_lookup_path`)
-- Optional `numeric_stats.json` (`--numeric_stats_path`) for the `legacy_zscore` pathway
 
 ### Output
 
 `{out_dir}/patients_tokenized.parquet`:
 
-| Column               | Type                  | Description                                       |
-| -------------------- | --------------------- | ------------------------------------------------- |
-| `subject_id`         | int64                 | Patient identifier                                |
-| `index_time`         | timestamp\[ns\]       | Index time                                        |
-| `embedding_text_ids` | list\<int32>          | Embedding-table id per event                      |
-| `token_ids`          | list\<int32>          | NTP label per event (`-100` = OOV)                |
-| `numeric_features`   | list\<list\<float32>> | Per-event feature vector (4- or 5-dim, see below) |
-| `age`                | list\<float32>        | Age in days at each event                         |
-| `age_normalized`     | list\<float32>        | Z-scored age                                      |
-| `length`             | int32                 | Number of events                                  |
+| Column               | Type                  | Description                                |
+| -------------------- | --------------------- | ------------------------------------------ |
+| `subject_id`         | int64                 | Patient identifier                         |
+| `index_time`         | timestamp\[ns\]       | Index time                                 |
+| `embedding_text_ids` | list\<int32>          | Embedding-table id per event               |
+| `token_ids`          | list\<int32>          | NTP label per event (`-100` = OOV)         |
+| `numeric_features`   | list\<list\<float32>> | Per-event 4-dim feature vector (see below) |
+| `age`                | list\<float32>        | Age in days at each event                  |
+| `age_normalized`     | list\<float32>        | Z-scored age                               |
+| `length`             | int32                 | Number of events                           |
 
 ### Required Arguments
 
@@ -308,15 +273,11 @@ ______________________________________________________________________
 
 ### Numeric Pathway Options
 
-- `--numeric_pathway_mode` - Feature construction:
-  - `legacy_zscore` (default) -- 5-dim `[value_log_zscore, quantile, ref_range_position, ref_range_available, value_present]`; requires `numeric_stats.json` and vocab quantile breaks.
-  - `ref_range_priority` -- 4-dim `[x_primary, is_refrange, is_log1p, value_present]`; institution-invariant, no external stats required.
-- `--numeric_override_mode` - `none` (default) or `zero` (force z-score=0, quantile=0.5); `legacy_zscore` only.
-- `--numeric_quantile_breaks_path` - Override quantile-break source for numeric features; `legacy_zscore` only.
+- `--numeric_pathway_mode` - Feature construction (only `ref_range_priority` is supported):
+  - `ref_range_priority` (default) -- 4-dim `[x_primary, is_refrange, is_log1p, value_present]`; institution-invariant, no external stats required. This is the numeric feature vector consumed by PORTER's FiLM numeric pathway.
 
 ### Common Options
 
-- `--numeric_stats_path` - Path to `numeric_stats.json` (`legacy_zscore` pathway)
 - `--split` - Data split to use
 - `--samples_path` - Path to samples.parquet
 - `--workers` - Worker processes (-1 = all cores, default; 0/1 = sequential)
@@ -334,15 +295,6 @@ pretokenize_embedding \
   --out_dir /path/to/tokenized_embedding \
   --split train \
   --numeric_pathway_mode ref_range_priority
-
-# legacy_zscore pathway (with precomputed stats)
-pretokenize_embedding \
-  --dataset_path /path/to/meds_reader_data \
-  --vocab_path /path/to/vocab.json \
-  --embedding_lookup_path /path/to/embedding_lookup \
-  --numeric_stats_path /path/to/numeric_stats.json \
-  --out_dir /path/to/tokenized_embedding \
-  --split train
 ```
 
 ______________________________________________________________________
@@ -433,7 +385,7 @@ All options below can be set in the config file or overridden via CLI flags.
 
 - `--input_mode` - `discrete` (default) trains on `pretokenize` output; `embedding` trains on `pretokenize_embedding` output using a frozen text-embedding encoder.
 - `--embedding_lookup_path` - Path to the embedding lookup directory (required when `--input_mode embedding`).
-- `--use_numerical_path` / `--no-use_numerical_path` - Enable or disable the FiLM numerical encoder (embedding mode only). With it, the model is dual-path (text + numeric); without it, text-only.
+- `--use_numerical_path` / `--no-use_numerical_path` - Enable or disable the FiLM numeric pathway (embedding mode only). With it, the event representation combines the text (description) pathway and the numeric pathway; without it, text-only.
 
 #### Training Settings
 

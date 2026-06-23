@@ -158,7 +158,7 @@ def _args(**overrides):
         embedding_lookup_path=None,
         use_numerical_path=True,
         numerical_hidden_dim=8,
-        numeric_pathway_mode="legacy_zscore",
+        numeric_pathway_mode="ref_range_priority",
         numerical_input_dim=None,
         freeze_text_embedding=True,
     )
@@ -184,16 +184,6 @@ def test_prepare_model_embedding_refrange_derives_4dim(tmp_path):
     )
     assert model.config.transformer.numerical_input_dim == 4
     assert isinstance(model.transformer.embed, DualPathInputEncoder)
-
-
-def test_prepare_model_embedding_legacy_derives_5dim(tmp_path):
-    look = _tiny_lookup(tmp_path / "lookup")
-    model = prepare_model(
-        _args(input_mode="embedding", embedding_lookup_path=str(look), numeric_pathway_mode="legacy_zscore"),
-        _DEVICE,
-        _LOGGER,
-    )
-    assert model.config.transformer.numerical_input_dim == 5
 
 
 def test_prepare_model_explicit_numerical_input_dim_overrides(tmp_path):
