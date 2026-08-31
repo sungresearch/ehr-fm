@@ -568,8 +568,7 @@ Parquet file at `--output_path` with the following schema:
 - `--num_workers` - Number of workers for pretokenization (-1=all cores)
 - `--max_tokens_per_batch` - Maximum tokens per batch (default: 16,384)
 - `--min_patients_per_batch` - Minimum patients per batch (default: 1)
-- `--use_fp16` - Use FP16 precision
-- `--use_bfloat16` - Use BFloat16 precision
+- `--use_bfloat16` - Run the model weights in bfloat16; the RoPE time axis (`ages`) always stays float32
 
 ### Other Options
 

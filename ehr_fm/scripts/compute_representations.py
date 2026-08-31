@@ -64,6 +64,24 @@ def _load_encoder_weights(model: EHRFM, checkpoint_dir: Path, logger) -> None:
         logger.warning("No trained encoder weights (text_projection / numerical_encoder) found in checkpoint")
 
 
+# Only tensors consumed by a matmul need the model's compute dtype. Everything else keeps the
+# dtype `packed_ehr_collate` produced.
+COMPUTE_DTYPE_KEYS = frozenset({"numeric_features"})
+
+
+def prepare_transformer_input(batch, model_dtype, device):
+    """Move a batch to the device, downcasting only allowlisted matmul inputs to the model dtype."""
+    out = {}
+    for key, value in batch.items():
+        if not isinstance(value, torch.Tensor):
+            out[key] = value
+        elif key in COMPUTE_DTYPE_KEYS and value.dtype.is_floating_point:
+            out[key] = value.to(device=device, dtype=model_dtype)
+        else:
+            out[key] = value.to(device)
+    return out
+
+
 def create_representations(
     tokenized_file_path: Path,
     model: EHRFM,
@@ -123,17 +141,7 @@ def create_representations(
         model_dtype = next(model.parameters()).dtype
 
     for batch in tqdm(dataloader, desc="Computing representations"):
-        transformer_input_on_device = {}
-
-        for key, value in batch.items():
-            if isinstance(value, torch.Tensor):
-                # Convert float tensors to model dtype, keep integer tensors as-is
-                if value.dtype.is_floating_point:
-                    transformer_input_on_device[key] = value.to(device=device, dtype=model_dtype)
-                else:
-                    transformer_input_on_device[key] = value.to(device)
-            else:
-                transformer_input_on_device[key] = value
+        transformer_input_on_device = prepare_transformer_input(batch, model_dtype, device)
 
         with torch.no_grad():
             hidden_states = model.transformer(transformer_input_on_device)
@@ -170,6 +178,21 @@ def create_representations(
 
     df_representations.write_parquet(output_path)
     logger.info("Representations saved successfully.")
+
+    # Provenance sidecar; written after the parquet so it doubles as a completion signal.
+    sidecar = output_path.with_suffix(".precision.json")
+    sidecar.write_text(
+        json.dumps(
+            {
+                "model_weight_dtype": str(next(model.parameters()).dtype),
+                "age_dtype": "float32",
+                "sincos_dtype": "torch.float32",
+                "n_rows": len(final_representations),
+            },
+            indent=2,
+        )
+    )
+    logger.info(f"Wrote precision sidecar: {sidecar}")
 
 
 def parse_args():
@@ -274,14 +297,9 @@ def parse_args():
         help="Max vocab size. Defaults to length of vocabulary",
     )
     parser.add_argument(
-        "--use_fp16",
-        action="store_true",
-        help="Use FP16 precision for representation computation.",
-    )
-    parser.add_argument(
         "--use_bfloat16",
         action="store_true",
-        help="Use BFloat16 precision for representation computation.",
+        help="Run the model weights in bfloat16. The RoPE time axis (ages) stays float32 regardless.",
     )
 
     parser.add_argument(
@@ -320,11 +338,7 @@ def main():
 
     logger.info(f"Loading EHRFM model from: {args.model_path}")
 
-    torch_dtype = None
-    if args.use_fp16:
-        torch_dtype = torch.float16
-    elif args.use_bfloat16:
-        torch_dtype = torch.bfloat16
+    torch_dtype = torch.bfloat16 if args.use_bfloat16 else None
 
     model = EHRFM.from_pretrained(
         args.model_path,

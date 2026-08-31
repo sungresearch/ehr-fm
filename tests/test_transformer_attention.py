@@ -89,7 +89,7 @@ class TestRoPEAgeCalibration:
     def test_positions_derive_from_age_not_index(self):
         dim = 8
         ages = torch.tensor([5.0, 5.0, 10.0, 0.0])
-        sin, cos = _fixed_pos_embedding(ages, dim, torch.float32, base=100.0)
+        sin, cos = _fixed_pos_embedding(ages, dim, base=100.0)
 
         assert sin.shape == (4, 1, dim)
         assert cos.shape == (4, 1, dim)
