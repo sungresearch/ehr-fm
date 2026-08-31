@@ -1,13 +1,6 @@
 """
 EHRFM dense transformer model for EHR foundation model pretraining adapted from CLMBR
 https://github.com/som-shahlab/femr/blob/main/src/femr/models/transformer.py
-
-Key differences:
-- Use alternating global and local causal attention layers
-- Linear layer bias is not used by default
-- GELU is enabled by default
-- First encoder layer norm is removed to reduce duplicated normalization at the start
-- Use 1.5 * hidden_size for intermediate size
 """
 
 from __future__ import annotations
@@ -36,28 +29,32 @@ def _rotate_every_two(x: torch.Tensor) -> torch.Tensor:
     return result
 
 
-def _fixed_pos_embedding(ages: torch.Tensor, dim: int, dtype: torch.dtype, base: float = 10000.0):
+def _fixed_pos_embedding(ages: torch.Tensor, dim: int, base: float = 10000.0):
     """Sin‑cos positional embedding on *age in days* (scalar per token).
 
     Args:
-        ages: Age in days per token, shape (num_tokens,)
+        ages: Age in days per token, shape (num_tokens,). Must be float32 (float64 accepted).
         dim: Embedding dimension (typically head_dim)
-        dtype: Output tensor dtype
         base: Base value for frequency computation. With linspace(0,2), effective theta = base^2.
               - base=100 → effective theta ~10K
               - base=10000 → effective theta ~100M
 
     Returns:
-        Tuple of (sin, cos) tensors, each of shape (num_tokens, 1, dim)
+        Tuple of float32 (sin, cos) tensors, each of shape (num_tokens, 1, dim)
     """
+    if ages.dtype not in (torch.float32, torch.float64):
+        raise TypeError(
+            f"ages must be float32, got {ages.dtype}. The RoPE time axis is not a matmul input "
+            "and must not be cast to a reduced-precision compute dtype."
+        )
     inv_freq = 1.0 / (base ** (torch.linspace(0, 2, steps=dim // 2, device=ages.device)))
     inv_freq = inv_freq.reshape(1, 1, dim // 2)
     ages = ages.reshape(ages.shape[0], 1)
     t = inv_freq * ages
     sin, cos = torch.sin(t), torch.cos(t)
     final_shape = (ages.shape[0], 1, dim)
-    sin = torch.stack((sin, sin), dim=-1).reshape(final_shape).type(dtype)
-    cos = torch.stack((cos, cos), dim=-1).reshape(final_shape).type(dtype)
+    sin = torch.stack((sin, sin), dim=-1).reshape(final_shape)
+    cos = torch.stack((cos, cos), dim=-1).reshape(final_shape)
     return sin, cos
 
 
@@ -176,14 +173,14 @@ class DenseTransformer(nn.Module):
 
         if self.config.separate_rope_by_attention:
             pos_embed_sparse = _fixed_pos_embedding(
-                batch["ages"], head_dim, x.dtype, base=self.config.rope_base_sparse
+                batch["ages"], head_dim, base=self.config.rope_base_sparse
             )
             pos_embed_global = _fixed_pos_embedding(
-                batch["ages"], head_dim, x.dtype, base=self.config.rope_base_global
+                batch["ages"], head_dim, base=self.config.rope_base_global
             )
         else:
             pos_embed_sparse = pos_embed_global = _fixed_pos_embedding(
-                batch["ages"], head_dim, x.dtype, base=self.config.rope_base_global
+                batch["ages"], head_dim, base=self.config.rope_base_global
             )
 
         base_mask = xformers.ops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(

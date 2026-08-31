@@ -15,18 +15,17 @@ def test_fixed_pos_embedding_base_parameter():
     """Test that _fixed_pos_embedding respects the base parameter."""
     ages = torch.tensor([0.0, 1.0, 2.0, 10.0], dtype=torch.float32)
     dim = 8
-    dtype = torch.float32
 
     # Test with different bases
-    sin_cos_base_100 = _fixed_pos_embedding(ages, dim, dtype, base=100.0)
-    sin_cos_base_10000 = _fixed_pos_embedding(ages, dim, dtype, base=10000.0)
+    sin_cos_base_100 = _fixed_pos_embedding(ages, dim, base=100.0)
+    sin_cos_base_10000 = _fixed_pos_embedding(ages, dim, base=10000.0)
 
     # Embeddings with different bases should be different
     assert not torch.allclose(sin_cos_base_100[0], sin_cos_base_10000[0], rtol=1e-4)
     assert not torch.allclose(sin_cos_base_100[1], sin_cos_base_10000[1], rtol=1e-4)
 
     # Default base should match explicit base=10000
-    sin_cos_default = _fixed_pos_embedding(ages, dim, dtype)
+    sin_cos_default = _fixed_pos_embedding(ages, dim)
     assert torch.allclose(sin_cos_default[0], sin_cos_base_10000[0], rtol=1e-6)
     assert torch.allclose(sin_cos_default[1], sin_cos_base_10000[1], rtol=1e-6)
 
