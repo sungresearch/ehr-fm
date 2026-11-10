@@ -161,6 +161,7 @@ def _args(**overrides):
         numeric_pathway_mode="ref_range_priority",
         numerical_input_dim=None,
         freeze_text_embedding=True,
+        seed=42,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -199,3 +200,23 @@ def test_prepare_model_explicit_numerical_input_dim_overrides(tmp_path):
         _LOGGER,
     )
     assert model.config.transformer.numerical_input_dim == 7
+
+
+def _initial_state(tmp_path, **overrides):
+    look = _tiny_lookup(tmp_path / "lookup")
+    args = _args(input_mode="embedding", embedding_lookup_path=str(look), **overrides)
+    return prepare_model(args, _DEVICE, _LOGGER).state_dict()
+
+
+def test_prepare_model_initial_weights_follow_the_seed(tmp_path):
+    first, again, other = (_initial_state(tmp_path, seed=seed) for seed in (42, 42, 43))
+    assert all(torch.equal(first[k], again[k]) for k in first)
+    key = "transformer.layers.0.input_proj.weight"
+    assert not torch.equal(first[key], other[key])
+
+
+def test_prepare_model_only_the_task_head_changes_with_its_size(tmp_path):
+    small, large = (_initial_state(tmp_path, num_ntp_classes=n) for n in (50, 60))
+    shared = [k for k in small if not k.startswith("task_head.")]
+    assert any(k.startswith("transformer.embed.") for k in shared)  # the encoder, built before the model
+    assert all(torch.equal(small[k], large[k]) for k in shared)

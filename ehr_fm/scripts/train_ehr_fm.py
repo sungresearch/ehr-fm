@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 from torch.optim import AdamW
-from transformers import EarlyStoppingCallback, TrainingArguments
+from transformers import EarlyStoppingCallback, TrainingArguments, set_seed
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 from transformers.trainer_pt_utils import get_parameter_names
 
@@ -155,6 +155,9 @@ def _detect_positions_mode(dataset, logger) -> bool:
 
 
 def prepare_model(args, device, logger):
+    # Seed before anything is constructed and build the input encoder before the model, so the initial weights
+    # follow --seed and those of the encoder and the transformer do not change with the task head.
+    set_seed(args.seed)
     input_mode = getattr(args, "input_mode", "discrete")
 
     transformer_config_dict = {
@@ -200,6 +203,16 @@ def prepare_model(args, device, logger):
         transformer_config_dict["numerical_input_dim"] = numerical_input_dim
         transformer_config_dict["numeric_pathway_mode"] = numeric_pathway_mode
 
+        freeze = getattr(args, "freeze_text_embedding", True)
+        text_embedding = embedding_lookup.as_torch_embedding(freeze=freeze)
+        encoder = DualPathInputEncoder(
+            text_embedding=text_embedding,
+            hidden_size=args.hidden_size,
+            use_numerical_path=args.use_numerical_path,
+            numerical_input_dim=numerical_input_dim,
+            numerical_hidden_dim=args.numerical_hidden_dim,
+        )
+
     cfg = EHRFMConfig(
         transformer=transformer_config_dict,
         task=dict(
@@ -217,15 +230,6 @@ def prepare_model(args, device, logger):
 
     # Wire up the language-grounded input encoder (text + optional FiLM numeric pathway) in embedding mode
     if input_mode == "embedding":
-        freeze = getattr(args, "freeze_text_embedding", True)
-        text_embedding = embedding_lookup.as_torch_embedding(freeze=freeze)
-        encoder = DualPathInputEncoder(
-            text_embedding=text_embedding,
-            hidden_size=args.hidden_size,
-            use_numerical_path=args.use_numerical_path,
-            numerical_input_dim=numerical_input_dim,
-            numerical_hidden_dim=args.numerical_hidden_dim,
-        )
         model.transformer.set_input_encoder(encoder)
         logger.info(
             f"Embedding mode: dim={embedding_lookup.embedding_dim}, "
