@@ -83,6 +83,7 @@ class DualPathInputEncoder(nn.Module):
     """Language-grounded input encoder: frozen text-embedding (description) pathway + optional FiLM numeric pathway.
 
     Replaces nn.Embedding in embedding mode. Output shape matches (seq_len, hidden_size).
+    The text embedding trains only if its parameters require grad (``--no-freeze_text_embedding``).
     State_dict keys: ``text_projection.*`` and (when use_numerical_path)
     ``numerical_encoder.{mlp.*,gamma_head.*,beta_head.*}``.
     """
@@ -112,9 +113,7 @@ class DualPathInputEncoder(nn.Module):
     def forward(
         self, embedding_text_ids: torch.Tensor, numeric_features: torch.Tensor | None = None
     ) -> torch.Tensor:
-        with torch.no_grad():
-            text_emb = self.text_embedding(embedding_text_ids)
-
+        text_emb = self.text_embedding(embedding_text_ids)
         projected = self.text_projection(text_emb)
 
         if not self.use_numerical_path or numeric_features is None:

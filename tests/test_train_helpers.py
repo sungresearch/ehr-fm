@@ -220,3 +220,40 @@ def test_prepare_model_only_the_task_head_changes_with_its_size(tmp_path):
     shared = [k for k in small if not k.startswith("task_head.")]
     assert any(k.startswith("transformer.embed.") for k in shared)  # the encoder, built before the model
     assert all(torch.equal(small[k], large[k]) for k in shared)
+
+
+# ---------------------------------------------------------------------------
+# Trainable text embedding (--no-freeze_text_embedding)
+# ---------------------------------------------------------------------------
+_OPTIMIZER = {"name": "adamw", "lr": 1e-3, "betas": [0.9, 0.95], "eps": 1e-8, "weight_decay": 0.1}
+
+
+def _batch(text_ids):
+    n = len(text_ids)
+    return {
+        "input_ids": torch.arange(1, n + 1),
+        "embedding_text_ids": torch.tensor(text_ids),
+        "numeric_features": torch.zeros(n, 4),
+        "ages": torch.arange(n, dtype=torch.float32),
+        "normalized_ages": torch.arange(n, dtype=torch.float32) / 10,
+        "patient_lengths": torch.tensor([n], dtype=torch.int32),
+        "label_indices": torch.arange(n - 1),
+        "task": {"labels": torch.arange(2, n + 1)},
+    }
+
+
+def test_unfrozen_text_embedding_trains_without_weight_decay(tmp_path):
+    look = _tiny_lookup(tmp_path / "lookup", n=6)
+    args = _args(input_mode="embedding", embedding_lookup_path=str(look), freeze_text_embedding=False)
+    model = prepare_model(args, _DEVICE, _LOGGER)
+    table = model.transformer.embed.text_embedding.weight
+    optimizer = build_optimizer(config=_OPTIMIZER, model=model, logger=_LOGGER)
+    no_decay = optimizer.param_groups[1]
+    assert no_decay["weight_decay"] == 0.0 and any(p is table for p in no_decay["params"])
+
+    before = table.detach().clone()
+    model(_batch([0, 1, 3, 1, 0]))[0].backward()
+    optimizer.step()
+    after = table.detach()
+    assert after[[0, 1, 3]].ne(before[[0, 1, 3]]).any(dim=1).all()  # the rows read
+    assert torch.equal(after[[2, 4, 5]], before[[2, 4, 5]])
