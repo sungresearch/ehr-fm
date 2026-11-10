@@ -121,6 +121,15 @@ class TestDualPathInputEncoder:
         for p in enc.numerical_encoder.parameters():
             assert p.grad is not None
 
+    def test_trainable_text_embedding_has_grad_on_rows_read(self):
+        enc = self._make_encoder()
+        enc.text_embedding.weight.requires_grad = True
+        enc(torch.tensor([3, 3, 7]), torch.randn(3, 5)).sum().backward()
+
+        grad = enc.text_embedding.weight.grad
+        assert grad[[3, 7]].ne(0).any(dim=1).all()
+        assert grad[[0, 1, 2, 4]].eq(0).all()
+
 
 class TestEmbeddingCollation:
     """Test packed_ehr_collate with embedding mode fields."""
