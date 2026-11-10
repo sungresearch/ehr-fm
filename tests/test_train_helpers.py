@@ -9,12 +9,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import torch
 from safetensors.numpy import save_file
+from safetensors.torch import load_file as load_safetensors
 
 from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
+from ehr_fm.embedding.lookup import TiedEmbedding
 from ehr_fm.logger import setup_logging
 from ehr_fm.models import DualPathInputEncoder
 from ehr_fm.models.config import EHRFMConfig
 from ehr_fm.models.transformer import EHRFM
+from ehr_fm.scripts.compute_representations import _load_encoder_weights
 from ehr_fm.scripts.train_ehr_fm import build_optimizer, prepare_data, prepare_model
 
 _DEVICE = torch.device("cpu")
@@ -124,13 +127,18 @@ def test_prepare_data_returns_datasets_and_auto_computes_max_length(tmp_path):
 # ---------------------------------------------------------------------------
 # prepare_model
 # ---------------------------------------------------------------------------
-def _tiny_lookup(dir_path, n=4, dim=8):
+def _tiny_lookup(dir_path, n=4, dim=8, table=None, row_index=None):
+    """A lookup of zeros, or of ``table``; with ``row_index``, string i reads row ``row_index[i]`` of it."""
+    table = np.zeros((n, dim)) if table is None else table
+    n_ids = len(table) if row_index is None else len(row_index)
     dir_path.mkdir(parents=True, exist_ok=True)
-    (dir_path / "id_mapping.json").write_text(json.dumps({f"t{i}": i for i in range(n)}))
+    (dir_path / "id_mapping.json").write_text(json.dumps({f"t{i}": i for i in range(n_ids)}))
     save_file(
-        {"embedding_table": np.zeros((n, dim), dtype=np.float16)},
+        {"embedding_table": table.astype(np.float16)},
         str(dir_path / "embedding_table.safetensors"),
     )
+    if row_index is not None:
+        save_file({"row_index": row_index.astype(np.int64)}, str(dir_path / "row_index.safetensors"))
     (dir_path / "metadata.json").write_text(json.dumps({"model_name": "test"}))
     return dir_path
 
@@ -242,10 +250,13 @@ def _batch(text_ids):
     }
 
 
+def _table_model(look, freeze=False):
+    args = _args(input_mode="embedding", embedding_lookup_path=str(look), freeze_text_embedding=freeze)
+    return prepare_model(args, _DEVICE, _LOGGER)
+
+
 def test_unfrozen_text_embedding_trains_without_weight_decay(tmp_path):
-    look = _tiny_lookup(tmp_path / "lookup", n=6)
-    args = _args(input_mode="embedding", embedding_lookup_path=str(look), freeze_text_embedding=False)
-    model = prepare_model(args, _DEVICE, _LOGGER)
+    model = _table_model(_tiny_lookup(tmp_path / "lookup", n=6))
     table = model.transformer.embed.text_embedding.weight
     optimizer = build_optimizer(config=_OPTIMIZER, model=model, logger=_LOGGER)
     no_decay = optimizer.param_groups[1]
@@ -257,3 +268,50 @@ def test_unfrozen_text_embedding_trains_without_weight_decay(tmp_path):
     after = table.detach()
     assert after[[0, 1, 3]].ne(before[[0, 1, 3]]).any(dim=1).all()  # the rows read
     assert torch.equal(after[[2, 4, 5]], before[[2, 4, 5]])
+
+
+# ---------------------------------------------------------------------------
+# Text embedding with shared rows (a lookup with row_index.safetensors)
+# ---------------------------------------------------------------------------
+_ROWS = np.random.default_rng(0).standard_normal((3, 8))
+_ROW_INDEX = np.array([0, 2, 0, 1, 2, 1])  # six strings on three rows
+_TABLE_PREFIX = "transformer.embed.text_embedding."
+
+
+def test_tied_text_embedding_trains_one_row_per_group_and_is_checkpointed(tmp_path):
+    model = _table_model(_tiny_lookup(tmp_path / "tied", table=_ROWS, row_index=_ROW_INDEX))
+    table = model.transformer.embed.text_embedding
+    assert isinstance(table, TiedEmbedding)
+
+    optimizer = build_optimizer(config=_OPTIMIZER, model=model, logger=_LOGGER)
+    model(_batch([0, 1, 3, 1, 0]))[0].backward()  # reads rows 0, 2 and 1 through strings 0, 1 and 3
+    optimizer.step()
+    rows = table(torch.arange(6)).detach()  # strings 0 and 2 share row 0, 1 and 4 row 2, 3 and 5 row 1
+    assert torch.equal(rows[0], rows[2]) and torch.equal(rows[1], rows[4]) and torch.equal(rows[3], rows[5])
+    assert not torch.equal(rows[0], torch.from_numpy(_ROWS[0].astype(np.float16).astype(np.float32)))
+
+    model.save_pretrained(tmp_path / "checkpoint")
+    state = load_safetensors(str(tmp_path / "checkpoint" / "model.safetensors"))
+    assert torch.equal(state[f"{_TABLE_PREFIX}weight"], table.weight.detach())
+    assert torch.equal(state[f"{_TABLE_PREFIX}row_index"], torch.from_numpy(_ROW_INDEX))
+
+    # Extraction reads the trained table from an exported plain lookup and skips the checkpoint's table keys.
+    extraction = _table_model(_tiny_lookup(tmp_path / "export", table=rows.numpy()), freeze=True)
+    _load_encoder_weights(extraction, tmp_path / "checkpoint", _LOGGER)
+    for name, value in model.transformer.embed.state_dict().items():
+        if not name.startswith("text_embedding."):
+            assert torch.equal(extraction.transformer.embed.state_dict()[name], value)
+
+
+def test_tied_and_unfrozen_text_embeddings_keep_every_other_initial_value(tmp_path):
+    def outside_and_table(model):
+        state = {k: v for k, v in model.state_dict().items() if not k.startswith(_TABLE_PREFIX)}
+        return state, model.transformer.embed.text_embedding(torch.arange(6)).detach()
+
+    plain = _tiny_lookup(tmp_path / "plain", table=_ROWS[_ROW_INDEX])
+    tied = _tiny_lookup(tmp_path / "tied", table=_ROWS, row_index=_ROW_INDEX)
+    frozen, frozen_table = outside_and_table(_table_model(plain, freeze=True))
+    for model in (_table_model(plain), _table_model(tied)):
+        state, table = outside_and_table(model)
+        assert state.keys() == frozen.keys() and all(torch.equal(state[k], frozen[k]) for k in frozen)
+        assert torch.equal(table, frozen_table)

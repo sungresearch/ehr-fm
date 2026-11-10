@@ -5,6 +5,7 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
+from safetensors.numpy import save_file
 
 from ehr_fm.embedding.build import (
     assign_ids,
@@ -13,7 +14,7 @@ from ehr_fm.embedding.build import (
     extract_unique_strings,
     serialize_artifacts,
 )
-from ehr_fm.embedding.lookup import EmbeddingLookup
+from ehr_fm.embedding.lookup import EmbeddingLookup, TiedEmbedding
 
 
 @pytest.fixture
@@ -215,3 +216,57 @@ class TestSerializeAndLookup:
 
         emb = lookup.as_torch_embedding(freeze=False)
         assert emb.weight.requires_grad
+
+
+@pytest.fixture
+def tied_artifacts(sample_artifacts):
+    """The sample lookup with a row index: five strings on its three rows."""
+    artifact_dir, table, _, metadata = sample_artifacts
+    row_index = np.array([0, 2, 0, 1, 2], dtype=np.int64)
+    serialize_artifacts(artifact_dir, table, {f"s{i}": i for i in range(5)}, {**metadata, "n_embeddings": 5})
+    save_file({"row_index": row_index}, str(artifact_dir / "row_index.safetensors"))
+    return artifact_dir, table, row_index
+
+
+class TestTiedLookup:
+    def test_embedding_table_is_read_through_the_index(self, tied_artifacts):
+        artifact_dir, table, row_index = tied_artifacts
+        lookup = EmbeddingLookup(artifact_dir)
+
+        assert lookup.num_embeddings == 5
+        assert lookup.embedding_dim == 8
+        np.testing.assert_array_equal(lookup.embedding_table, table[row_index])
+        np.testing.assert_array_equal(lookup.tied_table, table)
+
+    def test_index_must_cover_every_id(self, tied_artifacts):
+        artifact_dir, _, row_index = tied_artifacts
+        save_file({"row_index": row_index[:4]}, str(artifact_dir / "row_index.safetensors"))
+        with pytest.raises(ValueError, match="4 rows, 5 ids"):
+            EmbeddingLookup(artifact_dir)
+
+    def test_frozen(self, tied_artifacts):
+        emb = EmbeddingLookup(tied_artifacts[0]).as_torch_embedding(freeze=True)
+        assert isinstance(emb, TiedEmbedding)
+        assert not emb.weight.requires_grad
+
+    def test_strings_of_one_row_train_as_one(self, tied_artifacts):
+        artifact_dir, table, row_index = tied_artifacts
+        emb = EmbeddingLookup(artifact_dir).as_torch_embedding(freeze=False)
+        assert isinstance(emb, TiedEmbedding)
+        assert emb.weight.shape == (3, 8) and emb.weight.requires_grad
+        assert [n for n, _ in emb.named_parameters()] == ["weight"]
+        assert torch.equal(emb.row_index, torch.from_numpy(row_index))
+
+        out = emb(torch.tensor([0, 2, 1]))  # strings 0 and 2 share row 0
+        torch.testing.assert_close(out, torch.from_numpy(table[[0, 0, 2]].astype(np.float32)))
+        weights = torch.randn(3, 8)
+        (out * weights).sum().backward()
+        torch.testing.assert_close(emb.weight.grad[0], weights[0] + weights[1])
+        torch.testing.assert_close(emb.weight.grad[2], weights[2])
+        assert emb.weight.grad[1].eq(0).all()
+
+        torch.optim.AdamW([emb.weight], lr=0.1, weight_decay=0.0).step()
+        after = emb(torch.arange(5))
+        assert torch.equal(after[0], after[2]) and torch.equal(after[1], after[4])
+        assert not torch.equal(after[0], out[0])
+        assert torch.equal(after[3], torch.from_numpy(table[1].astype(np.float32)))  # row 1 had no gradient
