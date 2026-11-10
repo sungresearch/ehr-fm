@@ -22,7 +22,12 @@ from ehr_fm.trainer import FMTrainer
 
 
 def build_optimizer(config: dict, model: torch.nn.Module, logger) -> torch.optim.Optimizer:
-    """Build an optimizer from *config* (keys: name, lr, betas, eps, weight_decay)."""
+    """Build an optimizer from *config* (keys: name, lr, betas, eps, weight_decay).
+
+    The optional key text_embedding_lr_scale, when not 1.0, gives the trainable text embedding table a third
+    group: no weight decay and a learning rate of scale * lr. The scheduler multiplies the initial rate of
+    each group, so the table follows the same schedule.
+    """
     optimizer_name = config["name"]
 
     # Separate parameters for weight decay. We don't want to apply decay to biases,
@@ -43,6 +48,20 @@ def build_optimizer(config: dict, model: torch.nn.Module, logger) -> torch.optim
             "weight_decay": 0.0,
         },
     ]
+
+    table_scale = config.get("text_embedding_lr_scale", 1.0)
+    if table_scale != 1.0:
+        if not table_scale > 0:
+            raise ValueError(f"text_embedding_lr_scale must be positive, got {table_scale}")
+        table = dict(model.named_parameters()).get("transformer.embed.text_embedding.weight")
+        if table is None or not table.requires_grad:
+            raise ValueError(
+                f"text_embedding_lr_scale {table_scale} needs a trainable text embedding table "
+                "(--input_mode embedding with --no-freeze_text_embedding)"
+            )
+        no_decay = params_to_optimize[1]
+        no_decay["params"] = [p for p in no_decay["params"] if p is not table]
+        params_to_optimize.append({"params": [table], "weight_decay": 0.0, "lr": table_scale * config["lr"]})
 
     common_args = {
         "lr": config["lr"],
@@ -323,6 +342,7 @@ def train_model(args, model, train_dataset, train_sampler, val_dataset, val_samp
         "betas": (args.adam_beta1, args.adam_beta2),
         "eps": args.adam_epsilon,
         "weight_decay": args.weight_decay,
+        "text_embedding_lr_scale": args.text_embedding_lr_scale,
     }
     logger.info(f"Building optimizer ({args.optimizer_name}) with config: {optimizer_config}")
     optimizer = build_optimizer(config=optimizer_config, model=model, logger=logger)
@@ -611,6 +631,13 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Whether to freeze the text embedding table.",
+    )
+    embed_args.add_argument(
+        "--text_embedding_lr_scale",
+        type=float,
+        default=1.0,
+        help="Learning rate of the text embedding table as a multiple of --learning_rate, on the same "
+        "schedule and with no weight decay. A value other than 1.0 needs --no-freeze_text_embedding.",
     )
     embed_args.add_argument(
         "--numeric_pathway_mode",

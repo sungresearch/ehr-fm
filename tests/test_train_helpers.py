@@ -1,5 +1,6 @@
 """Tests for train_ehr_fm helpers: build_optimizer, prepare_data, prepare_model."""
 
+import copy
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -7,9 +8,11 @@ from types import SimpleNamespace
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 import torch
 from safetensors.numpy import save_file
 from safetensors.torch import load_file as load_safetensors
+from transformers import get_scheduler
 
 from ehr_fm.data import TokenBudgetBatchSampler, TokenizedDataset
 from ehr_fm.embedding.lookup import TiedEmbedding
@@ -315,3 +318,86 @@ def test_tied_and_unfrozen_text_embeddings_keep_every_other_initial_value(tmp_pa
         state, table = outside_and_table(model)
         assert state.keys() == frozen.keys() and all(torch.equal(state[k], frozen[k]) for k in frozen)
         assert torch.equal(table, frozen_table)
+
+
+# ---------------------------------------------------------------------------
+# Learning rate of the text embedding table (--text_embedding_lr_scale)
+# ---------------------------------------------------------------------------
+_TABLE = f"{_TABLE_PREFIX}weight"
+_SCALE = 0.1
+
+
+def _scaled(scale):
+    return {**_OPTIMIZER, "text_embedding_lr_scale": scale}
+
+
+def _groups(config, model):
+    """(names in order, lr, weight_decay) of each parameter group of the optimizer that ``config`` gives."""
+    optimizer = build_optimizer(config=config, model=model, logger=_LOGGER)
+    names = {id(p): n for n, p in model.named_parameters()}
+    return [([names[id(p)] for p in g["params"]], g["lr"], g["weight_decay"]) for g in optimizer.param_groups]
+
+
+def test_text_embedding_lr_scale_gives_the_table_its_own_group(tmp_path):
+    model = _table_model(_tiny_lookup(tmp_path / "lookup", table=_ROWS[_ROW_INDEX]))
+    decay, no_decay = _groups(_OPTIMIZER, model)
+    assert _TABLE in no_decay[0]
+    assert _groups(_scaled(1.0), model) == [decay, no_decay]
+
+    others = ([n for n in no_decay[0] if n != _TABLE], *no_decay[1:])
+    assert _groups(_scaled(_SCALE), model) == [decay, others, ([_TABLE], _SCALE * _OPTIMIZER["lr"], 0.0)]
+
+
+def test_text_embedding_lr_scale_follows_the_schedule(tmp_path):
+    model = _table_model(_tiny_lookup(tmp_path / "lookup", table=_ROWS[_ROW_INDEX]))
+    optimizer = build_optimizer(config=_scaled(_SCALE), model=model, logger=_LOGGER)
+    scheduler = get_scheduler(
+        "cosine_with_min_lr",
+        optimizer,
+        num_warmup_steps=150,
+        num_training_steps=1200,
+        scheduler_specific_kwargs={"min_lr_rate": 0.1},
+    )
+    rates = {}
+    for step in range(1200):
+        if step in (0, 150, 1000, 1199):
+            rates[step] = [g["lr"] for g in optimizer.param_groups]
+        optimizer.step()  # no gradients, so no parameter changes
+        scheduler.step()
+    assert rates[150][0] == pytest.approx(_OPTIMIZER["lr"])
+    assert rates[1199][0] < rates[1000][0] < rates[150][0]
+    for decay, no_decay, table in rates.values():
+        assert decay == no_decay and table == pytest.approx(_SCALE * decay, rel=1e-12, abs=0.0)
+
+
+def test_text_embedding_lr_scale_scales_the_table_step_only(tmp_path):
+    model = _table_model(_tiny_lookup(tmp_path / "lookup", table=_ROWS[_ROW_INDEX]))
+    before = {n: p.detach().clone() for n, p in model.named_parameters()}
+    after = {}
+    for scale in (1.0, _SCALE):
+        run = copy.deepcopy(model)
+        optimizer = build_optimizer(config=_scaled(scale), model=run, logger=_LOGGER)
+        torch.manual_seed(0)
+        run(_batch([0, 1, 3, 1, 0]))[0].backward()
+        optimizer.step()
+        after[scale] = {n: p.detach().clone() for n, p in run.named_parameters()}
+
+    for name in before:
+        if name != _TABLE:
+            assert torch.equal(after[_SCALE][name], after[1.0][name]), name
+    start = before[_TABLE].double()
+    step_one, step_scaled = after[1.0][_TABLE].double() - start, after[_SCALE][_TABLE].double() - start
+    assert step_one[[0, 1, 3]].ne(0).any(dim=1).all() and step_one[[2, 4, 5]].eq(0).all()
+    # The table is stored in float32: each step includes one rounding of the parameter, at most eps * |p| / 2.
+    bound = torch.finfo(torch.float32).eps * start.abs()
+    assert ((step_scaled - _SCALE * step_one).abs() <= bound).all()
+
+
+def test_text_embedding_lr_scale_needs_a_trainable_table_and_a_positive_scale(tmp_path):
+    look = _tiny_lookup(tmp_path / "lookup", table=_ROWS[_ROW_INDEX])
+    for model in (_table_model(look, freeze=True), _model()):
+        with pytest.raises(ValueError, match="needs a trainable text embedding table"):
+            build_optimizer(config=_scaled(_SCALE), model=model, logger=_LOGGER)
+    for scale in (0.0, -0.1):
+        with pytest.raises(ValueError, match="must be positive"):
+            build_optimizer(config=_scaled(scale), model=_table_model(look), logger=_LOGGER)
