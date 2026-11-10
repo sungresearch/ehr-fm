@@ -90,7 +90,7 @@ class DualPathInputEncoder(nn.Module):
 
     def __init__(
         self,
-        text_embedding: nn.Embedding,
+        text_embedding: nn.Module,
         hidden_size: int,
         use_numerical_path: bool = True,
         numerical_input_dim: int = 5,
